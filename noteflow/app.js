@@ -49,7 +49,12 @@ async function dbDelete(id) {
 }
 
 // --- Local prefs (theme) ---
-const PREF_KEYS = { theme: "noteflow.theme", sort: "noteflow.sort" };
+const PREF_KEYS = {
+  theme: "noteflow.theme",
+  sort: "noteflow.sort",
+  streakDate: "noteflow.streak.date",
+  streakCount: "noteflow.streak.count",
+};
 const loadPref = (key, fallback) => {
   try {
     const raw = localStorage.getItem(key);
@@ -65,6 +70,8 @@ let currentNote = null;
 let searchQuery = "";
 let activeFolderFilter = null;
 let listView = "active"; // "active" | "archived" | "trash"
+let selectionMode = false;
+let selectedIds = new Set();
 
 // --- Theme ---
 const themeToggle = document.getElementById("theme-toggle");
@@ -83,6 +90,28 @@ themeToggle.addEventListener("click", () => {
   savePref(PREF_KEYS.theme, theme);
   applyTheme(theme);
 });
+
+// --- Daily streak (local, based on days with at least one save) ---
+const streakBadge = document.getElementById("streak-badge");
+const dateKey = (ts) => new Date(ts).toISOString().slice(0, 10);
+
+function updateStreakBadge() {
+  const count = loadPref(PREF_KEYS.streakCount, 0);
+  streakBadge.classList.toggle("hidden", count < 1);
+  if (count >= 1) streakBadge.textContent = `🔥 ${count} jour${count > 1 ? "s" : ""}`;
+}
+
+function recordActivityToday() {
+  const today = dateKey(Date.now());
+  const last = loadPref(PREF_KEYS.streakDate, null);
+  if (last === today) return;
+  const yesterday = dateKey(Date.now() - 86400000);
+  const count = last === yesterday ? loadPref(PREF_KEYS.streakCount, 0) + 1 : 1;
+  savePref(PREF_KEYS.streakDate, today);
+  savePref(PREF_KEYS.streakCount, count);
+  updateStreakBadge();
+}
+updateStreakBadge();
 
 // --- Overflow menus (list + editor "more" menus) ---
 function setupMenu(btnId, panelId) {
@@ -395,7 +424,89 @@ viewBannerClose.addEventListener("click", () => setListView("active"));
 document.getElementById("view-archive-btn").addEventListener("click", () => setListView("archived"));
 document.getElementById("view-trash-btn").addEventListener("click", () => setListView("trash"));
 
+// --- Multi-selection (bulk actions on the note list) ---
+const selectionBar = document.getElementById("selection-bar");
+const selectionCount = document.getElementById("selection-count");
+
+function setSelectionMode(on) {
+  selectionMode = on;
+  if (!on) selectedIds.clear();
+  selectionBar.classList.toggle("hidden", !on);
+  renderList();
+}
+
+function updateSelectionCount() {
+  selectionCount.textContent = `${selectedIds.size} sélectionnée${selectedIds.size > 1 ? "s" : ""}`;
+}
+
+function toggleSelect(id, li, checkbox) {
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  checkbox.checked = selectedIds.has(id);
+  li.classList.toggle("selected", selectedIds.has(id));
+  updateSelectionCount();
+}
+
+document.getElementById("select-mode-btn").addEventListener("click", () => setSelectionMode(true));
+document.getElementById("sel-cancel-btn").addEventListener("click", () => setSelectionMode(false));
+
+document.getElementById("sel-archive-btn").addEventListener("click", async () => {
+  const ids = [...selectedIds];
+  if (!ids.length) return;
+  for (const id of ids) {
+    const note = notes.find((n) => n.id === id);
+    if (note) {
+      note.archived = true;
+      await persistNote(note);
+    }
+  }
+  showToast(`${ids.length} note${ids.length > 1 ? "s" : ""} archivée${ids.length > 1 ? "s" : ""}`);
+  setSelectionMode(false);
+});
+
+document.getElementById("sel-delete-btn").addEventListener("click", async () => {
+  const ids = [...selectedIds];
+  if (!ids.length) return;
+  const now = Date.now();
+  for (const id of ids) {
+    const note = notes.find((n) => n.id === id);
+    if (note) {
+      note.deletedAt = now;
+      await persistNote(note);
+    }
+  }
+  showToast(`${ids.length} note${ids.length > 1 ? "s" : ""} déplacée${ids.length > 1 ? "s" : ""} dans la corbeille`, async () => {
+    for (const id of ids) {
+      const note = notes.find((n) => n.id === id);
+      if (note) {
+        note.deletedAt = null;
+        await persistNote(note);
+      }
+    }
+    renderList();
+  });
+  setSelectionMode(false);
+});
+
+document.getElementById("sel-move-btn").addEventListener("click", async () => {
+  const ids = [...selectedIds];
+  if (!ids.length) return;
+  const folder = window.prompt("Déplacer vers quel dossier ?", "");
+  if (folder === null) return;
+  for (const id of ids) {
+    const note = notes.find((n) => n.id === id);
+    if (note) {
+      note.folder = folder.trim();
+      await persistNote(note);
+    }
+  }
+  showToast(`${ids.length} note${ids.length > 1 ? "s" : ""} déplacée${ids.length > 1 ? "s" : ""}`);
+  setSelectionMode(false);
+});
+
 function renderList() {
+  notesListEl.classList.toggle("selection-mode", selectionMode);
+  if (selectionMode) updateSelectionCount();
   renderFolderFilters();
   const query = searchQuery.trim().toLowerCase();
   let visible = notes.filter((n) => {
@@ -438,6 +549,7 @@ function renderList() {
         ? '<button class="note-action" data-action="unarchive" aria-label="Désarchiver"><svg class="icon"><use href="#icon-unarchive"/></svg></button>'
         : '<button class="note-action" data-action="delete" aria-label="Supprimer"><svg class="icon"><use href="#icon-close"/></svg></button>';
     li.innerHTML = `
+      <input type="checkbox" class="note-select-checkbox" aria-label="Sélectionner cette note" />
       <span class="drag-handle" aria-hidden="true">⠿</span>
       <div class="note-main">
         <div class="note-title">${badges}<span class="note-title-text"></span></div>
@@ -467,7 +579,18 @@ function renderList() {
       chip.textContent = note.folder;
       li.querySelector(".note-meta").appendChild(chip);
     }
+    const checkbox = li.querySelector(".note-select-checkbox");
+    checkbox.checked = selectedIds.has(note.id);
+    li.classList.toggle("selected", selectedIds.has(note.id));
+    checkbox.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSelect(note.id, li, checkbox);
+    });
     li.querySelector(".note-main").addEventListener("click", () => {
+      if (selectionMode) {
+        toggleSelect(note.id, li, checkbox);
+        return;
+      }
       if (listView === "trash") {
         showToast("Restaure la note pour l'ouvrir");
         return;
@@ -648,6 +771,9 @@ function loadNoteIntoEditor() {
   updatePaperStyleSelection();
   updateArchiveMenuItem();
   updateWordCount();
+  notePage.classList.remove("page-turn");
+  void notePage.offsetWidth;
+  notePage.classList.add("page-turn");
   setMode("text");
   setTimeout(() => {
     initCanvasSize();
@@ -1921,6 +2047,7 @@ async function handleRemoteSnapshot(snapshot) {
 }
 
 async function persistNote(note) {
+  recordActivityToday();
   await dbPut(note);
   if (syncDb && syncCode && !applyingRemoteChange) {
     try {
@@ -1982,6 +2109,10 @@ async function initSyncFromStorage() {
 // --- Keyboard shortcuts ---
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    if (!cmdkOverlay.classList.contains("hidden")) {
+      closeCommandPalette();
+      return;
+    }
     if (!lockOverlay.classList.contains("hidden")) {
       lockCancelBtn.click();
       return;
@@ -1992,6 +2123,13 @@ document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (!mod) return;
   const key = e.key.toLowerCase();
+
+  if (key === "k") {
+    e.preventDefault();
+    if (cmdkOverlay.classList.contains("hidden")) openCommandPalette();
+    else closeCommandPalette();
+    return;
+  }
 
   // Undo (Ctrl/Cmd+Z): an active "undo this action" toast (delete, archive,
   // clear drawing…) always takes priority, on either screen.
@@ -2036,6 +2174,106 @@ document.addEventListener("keydown", (e) => {
   // Ctrl/Cmd+B, +I, +U are left to the browser's native contenteditable
   // handling (calling execCommand ourselves on top of it double-toggles
   // the formatting back off).
+});
+
+// --- Command palette (⌘K quick switcher + actions) ---
+const cmdkOverlay = document.getElementById("command-palette");
+const cmdkInput = document.getElementById("cmdk-input");
+const cmdkList = document.getElementById("cmdk-list");
+let cmdkItems = [];
+let cmdkActiveIndex = 0;
+
+function closeCommandPalette() {
+  cmdkOverlay.classList.add("hidden");
+}
+
+function openCommandPalette() {
+  cmdkOverlay.classList.remove("hidden");
+  cmdkInput.value = "";
+  renderCmdkResults("");
+  setTimeout(() => cmdkInput.focus(), 30);
+}
+
+function goToNote(id) {
+  if (editorScreen.classList.contains("active")) flushSave(true);
+  showList();
+  openNote(id);
+}
+
+function cmdkActionItems(query) {
+  const items = [
+    { label: "Nouvelle note", sub: "Créer une note vide", action: () => newNoteBtn.click() },
+    { label: "Basculer le thème", sub: "Auto / clair / sombre", action: () => themeToggle.click() },
+    { label: "Voir les archives", sub: "", action: () => { showList(); setListView("archived"); } },
+    { label: "Voir la corbeille", sub: "", action: () => { showList(); setListView("trash"); } },
+    { label: "Sélection multiple", sub: "Archiver / déplacer / supprimer plusieurs notes", action: () => { showList(); setSelectionMode(true); } },
+  ];
+  if (!query) return items;
+  const q = query.toLowerCase();
+  return items.filter((it) => it.label.toLowerCase().includes(q));
+}
+
+function renderCmdkResults(query) {
+  const q = query.trim().toLowerCase();
+  const noteItems = notes
+    .filter((n) => !n.deletedAt)
+    .filter((n) => !q || (n.title || "sans titre").toLowerCase().includes(q) || (n.folder || "").toLowerCase().includes(q))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 8)
+    .map((n) => ({
+      label: n.locked ? "🔒 " + (n.title || "Sans titre") : n.title || "Sans titre",
+      sub: n.folder || "Note",
+      action: () => goToNote(n.id),
+    }));
+  cmdkItems = [...cmdkActionItems(query), ...noteItems];
+  cmdkActiveIndex = 0;
+  cmdkList.innerHTML = "";
+  if (!cmdkItems.length) {
+    cmdkList.innerHTML = '<li class="cmdk-empty">Aucun résultat</li>';
+    return;
+  }
+  cmdkItems.forEach((item, i) => {
+    const li = document.createElement("li");
+    li.className = "cmdk-item" + (i === cmdkActiveIndex ? " active" : "");
+    li.innerHTML = `<span class="cmdk-item-label"></span><span class="cmdk-item-sub"></span>`;
+    li.querySelector(".cmdk-item-label").textContent = item.label;
+    li.querySelector(".cmdk-item-sub").textContent = item.sub || "";
+    li.addEventListener("mouseenter", () => setCmdkActive(i));
+    li.addEventListener("click", () => runCmdkItem(i));
+    cmdkList.appendChild(li);
+  });
+}
+
+function setCmdkActive(index) {
+  cmdkActiveIndex = index;
+  cmdkList.querySelectorAll(".cmdk-item").forEach((li, i) => li.classList.toggle("active", i === index));
+}
+
+function runCmdkItem(index) {
+  const item = cmdkItems[index];
+  if (!item) return;
+  closeCommandPalette();
+  item.action();
+}
+
+cmdkInput.addEventListener("input", () => renderCmdkResults(cmdkInput.value));
+document.getElementById("cmdk-btn").addEventListener("click", openCommandPalette);
+cmdkOverlay.addEventListener("click", (e) => {
+  if (e.target === cmdkOverlay) closeCommandPalette();
+});
+cmdkInput.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    setCmdkActive(Math.min(cmdkActiveIndex + 1, cmdkItems.length - 1));
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    setCmdkActive(Math.max(cmdkActiveIndex - 1, 0));
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    runCmdkItem(cmdkActiveIndex);
+  } else if (e.key === "Escape") {
+    closeCommandPalette();
+  }
 });
 
 // --- Init ---

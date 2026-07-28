@@ -57,9 +57,13 @@
   <!-- List screen -->
   <section id="list-screen" class="screen active">
     <header class="topbar">
-      <h1>NoteFlow</h1>
+      <div class="topbar-title">
+        <h1>NoteFlow</h1>
+        <span id="streak-badge" class="streak-badge hidden" title="Jours consécutifs d'activité"></span>
+      </div>
       <div class="topbar-actions">
         <input id="import-input" type="file" accept="application/json" class="hidden" />
+        <button id="cmdk-btn" class="icon-btn cmdk-trigger" type="button" title="Palette de commandes (⌘K)">⌘K</button>
         <button id="theme-toggle" class="icon-btn" type="button" title="Thème"><svg class="icon"><use href="#icon-contrast"/></svg></button>
         <div class="menu-wrap">
           <button id="list-menu-btn" class="icon-btn" type="button" title="Plus d'options"><svg class="icon"><use href="#icon-more"/></svg></button>
@@ -67,6 +71,8 @@
             <button class="menu-item" id="export-btn" type="button"><svg class="icon"><use href="#icon-download"/></svg>Exporter les notes</button>
             <button class="menu-item" id="import-btn" type="button"><svg class="icon"><use href="#icon-upload"/></svg>Importer des notes</button>
             <button class="menu-item" id="sync-toggle" type="button"><svg class="icon"><use href="#icon-cloud"/></svg>Synchronisation</button>
+            <div class="menu-sep"></div>
+            <button class="menu-item" id="select-mode-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Sélection multiple</button>
             <div class="menu-sep"></div>
             <button class="menu-item" id="view-archive-btn" type="button"><svg class="icon"><use href="#icon-archive"/></svg>Archives</button>
             <button class="menu-item" id="view-trash-btn" type="button"><svg class="icon"><use href="#icon-trash"/></svg>Corbeille</button>
@@ -79,6 +85,16 @@
     <div id="view-banner" class="view-banner hidden">
       <span id="view-banner-title"></span>
       <button id="view-banner-close" type="button" class="link-btn">Retour aux notes</button>
+    </div>
+
+    <div id="selection-bar" class="view-banner selection-bar hidden">
+      <span id="selection-count">0 sélectionnée(s)</span>
+      <div class="selection-actions">
+        <button id="sel-archive-btn" type="button" class="link-btn">Archiver</button>
+        <button id="sel-move-btn" type="button" class="link-btn">Déplacer</button>
+        <button id="sel-delete-btn" type="button" class="link-btn danger">Supprimer</button>
+        <button id="sel-cancel-btn" type="button" class="link-btn">Annuler</button>
+      </div>
     </div>
 
     <div id="sync-panel" class="sync-panel hidden">
@@ -277,6 +293,16 @@
   <div id="toast" class="toast hidden" role="status">
     <span id="toast-text"></span>
     <button id="toast-undo" type="button">Annuler</button>
+  </div>
+
+  <div id="command-palette" class="command-palette hidden">
+    <div class="cmdk-box">
+      <div class="cmdk-input-row">
+        <svg class="icon"><use href="#icon-search"/></svg>
+        <input id="cmdk-input" type="text" class="cmdk-input" placeholder="Aller à une note ou une action…" autocomplete="off" />
+      </div>
+      <ul id="cmdk-list" class="cmdk-list"></ul>
+    </div>
   </div>
 
   <div id="lock-overlay" class="lock-overlay hidden">
