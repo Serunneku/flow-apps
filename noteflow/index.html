@@ -13,6 +13,11 @@
 <div class="app" id="app">
   <!-- List screen -->
   <section id="list-screen" class="screen active">
+    <div class="smoke-bg" aria-hidden="true">
+      <span class="smoke-blob smoke-1"></span>
+      <span class="smoke-blob smoke-2"></span>
+      <span class="smoke-blob smoke-3"></span>
+    </div>
     <header class="topbar">
       <h1>NoteFlow</h1>
       <div class="topbar-actions">
@@ -71,7 +76,7 @@
 
     <div class="mode-switch">
       <button type="button" id="mode-text-btn" class="mode-btn active">✏️ Texte</button>
-      <button type="button" id="mode-draw-btn" class="mode-btn">🖌️ Dessin</button>
+      <button type="button" id="mode-draw-btn" class="mode-btn">🖌️ Dessin &amp; surlignage</button>
     </div>
 
     <div class="toolbar" id="format-toolbar">
@@ -89,8 +94,15 @@
       </div>
       <div class="toolbar-group">
         <button type="button" data-cmd="insertUnorderedList" title="Liste à puces">☰</button>
-        <button type="button" data-cmd="checklist" title="Liste à cocher">☑</button>
+        <button type="button" data-cmd="insertOrderedList" title="Liste numérotée">①</button>
+        <button type="button" data-cmd="checklist" title="Liste à cocher (to-do)">☑</button>
         <button type="button" data-cmd="removeFormat" title="Effacer la mise en forme">⊘</button>
+      </div>
+      <div class="toolbar-group">
+        <button type="button" data-cmd="table" title="Insérer un tableau">▦</button>
+        <button type="button" data-cmd="table-add-row" title="Ajouter une ligne">＋⎯</button>
+        <button type="button" data-cmd="table-add-col" title="Ajouter une colonne">＋❘</button>
+        <button type="button" data-cmd="table-delete" title="Supprimer le tableau">▦⊘</button>
       </div>
       <div class="toolbar-group text-color-row" id="text-color-row"></div>
       <div class="toolbar-group">
@@ -109,18 +121,23 @@
     </div>
 
     <div class="toolbar hidden" id="draw-toolbar">
+      <div class="toolbar-group">
+        <button type="button" id="pen-btn" class="tool-btn active" title="Stylo">🖊️</button>
+        <button type="button" id="highlighter-btn" class="tool-btn" title="Surligneur">🖍️</button>
+        <button type="button" id="eraser-btn" class="tool-btn" title="Gomme">🧽</button>
+      </div>
       <div class="toolbar-group color-row" id="color-row"></div>
       <div class="toolbar-group">
         <button type="button" data-width="3" class="width-btn active" title="Trait fin">●</button>
         <button type="button" data-width="7" class="width-btn" title="Trait moyen">●</button>
         <button type="button" data-width="14" class="width-btn" title="Trait épais">●</button>
-        <button type="button" id="eraser-btn" title="Gomme">🧽</button>
       </div>
       <div class="toolbar-group">
         <button type="button" id="undo-stroke-btn" title="Annuler le dernier trait">↩️</button>
         <button type="button" id="clear-draw-btn" title="Tout effacer">✕</button>
       </div>
     </div>
+    <p class="draw-hint hidden" id="draw-hint">Dessine ou surligne directement sur ta page : le texte reste visible en dessous.</p>
 
     <div class="page-scroll">
       <div id="note-page" class="note-page">

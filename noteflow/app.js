@@ -398,6 +398,7 @@ function setMode(mode) {
   modeDrawBtn.classList.toggle("active", mode === "draw");
   document.getElementById("format-toolbar").classList.toggle("hidden", mode !== "text");
   drawToolbar.classList.toggle("hidden", mode !== "draw");
+  drawHint.classList.toggle("hidden", mode !== "draw");
   textEditor.contentEditable = mode === "text" ? "true" : "false";
   if (mode === "text") setTimeout(() => textEditor.focus(), 0);
 }
@@ -448,6 +449,14 @@ formatToolbar.addEventListener("click", (e) => {
     document.execCommand("formatBlock", false, isHeading ? "p" : "h2");
   } else if (cmd === "checklist") {
     insertChecklistItem();
+  } else if (cmd === "table") {
+    insertTable();
+  } else if (cmd === "table-add-row") {
+    tableAddRow();
+  } else if (cmd === "table-add-col") {
+    tableAddColumn();
+  } else if (cmd === "table-delete") {
+    tableDelete();
   } else {
     document.execCommand(cmd, false, null);
   }
@@ -500,10 +509,26 @@ FONTS.forEach((f) => {
 fontSelect.addEventListener("mousedown", (e) => e.stopPropagation());
 fontSelect.addEventListener("change", () => {
   restoreSelection();
-  if (fontSelect.value) document.execCommand("fontName", false, fontSelect.value);
+  document.execCommand("fontName", false, fontSelect.value || "inherit");
   scheduleSave();
-  fontSelect.value = "";
+  updateFontSelectState();
 });
+
+function firstFontToken(value) {
+  return (value.split(",")[0] || "").replace(/['"]/g, "").trim().toLowerCase();
+}
+
+function updateFontSelectState() {
+  let current = "";
+  try {
+    current = document.queryCommandValue("fontName") || "";
+  } catch {
+    current = "";
+  }
+  const currentFirst = firstFontToken(current);
+  const match = FONTS.find((f) => f.value && firstFontToken(f.value) === currentFirst);
+  fontSelect.value = match ? match.value : "";
+}
 
 function insertChecklistItem() {
   const sel = window.getSelection();
@@ -533,6 +558,80 @@ function insertChecklistItem() {
   }
 }
 
+function currentTable() {
+  const sel = window.getSelection();
+  if (savedRange) {
+    let node = savedRange.startContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    const table = node && node.closest ? node.closest("table") : null;
+    if (table) return table;
+  }
+  if (sel.rangeCount) {
+    let node = sel.getRangeAt(0).startContainer;
+    if (node.nodeType === 3) node = node.parentElement;
+    if (node && node.closest) return node.closest("table");
+  }
+  const tables = textEditor.querySelectorAll("table");
+  return tables.length ? tables[tables.length - 1] : null;
+}
+
+function makeCell() {
+  const td = document.createElement("td");
+  td.contentEditable = "true";
+  td.innerHTML = "<br>";
+  return td;
+}
+
+function insertTable() {
+  const table = document.createElement("table");
+  table.className = "note-table";
+  for (let r = 0; r < 3; r++) {
+    const tr = document.createElement("tr");
+    for (let c = 0; c < 3; c++) tr.appendChild(makeCell());
+    table.appendChild(tr);
+  }
+  const sel = window.getSelection();
+  const p = document.createElement("p");
+  p.innerHTML = "<br>";
+  let range;
+  if (sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
+    range = sel.getRangeAt(0);
+    range.collapse(false);
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(textEditor);
+    range.collapse(false);
+  }
+  range.insertNode(table);
+  range.setStartAfter(table);
+  range.collapse(true);
+  range.insertNode(p);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  table.rows[0].cells[0].focus();
+}
+
+function tableAddRow() {
+  const table = currentTable();
+  if (!table) return;
+  const cols = table.rows[0] ? table.rows[0].cells.length : 3;
+  const tr = document.createElement("tr");
+  for (let c = 0; c < cols; c++) tr.appendChild(makeCell());
+  table.appendChild(tr);
+}
+
+function tableAddColumn() {
+  const table = currentTable();
+  if (!table) return;
+  Array.from(table.rows).forEach((row) => row.appendChild(makeCell()));
+}
+
+function tableDelete() {
+  const table = currentTable();
+  if (!table) return;
+  table.remove();
+}
+
 textEditor.addEventListener("change", (e) => {
   if (e.target.type === "checkbox") {
     const span = e.target.nextElementSibling;
@@ -554,6 +653,7 @@ function updateToolbarState() {
     }
     btn.classList.toggle("active", active);
   });
+  updateFontSelectState();
 }
 textEditor.addEventListener("keyup", updateToolbarState);
 textEditor.addEventListener("mouseup", updateToolbarState);
@@ -565,27 +665,51 @@ const colorRow = document.getElementById("color-row");
 const undoStrokeBtn = document.getElementById("undo-stroke-btn");
 const clearDrawBtn = document.getElementById("clear-draw-btn");
 const eraserBtn = document.getElementById("eraser-btn");
+const penBtn = document.getElementById("pen-btn");
+const highlighterBtn = document.getElementById("highlighter-btn");
+const drawHint = document.getElementById("draw-hint");
 
 const COLORS = ["#1d1d1f", "#a13d3d", "#a8752c", "#3d6b52", "#3a5a8c", "#6b4a8c"];
+const HIGHLIGHT_COLORS = ["#ffe066", "#a0e6a0", "#8fd3ff", "#ffb0d6", "#ffb066"];
 let drawColor = COLORS[0];
 let drawWidth = 3;
 let isErasing = false;
+let isHighlighting = false;
 let activeStroke = null;
 
-COLORS.forEach((color, i) => {
-  const swatch = document.createElement("button");
-  swatch.type = "button";
-  swatch.className = "color-swatch" + (i === 0 ? " selected" : "");
-  swatch.style.background = color;
-  swatch.addEventListener("click", () => {
-    drawColor = color;
-    isErasing = false;
-    eraserBtn.classList.remove("active");
-    colorRow.querySelectorAll(".color-swatch").forEach((s) => s.classList.remove("selected"));
-    swatch.classList.add("selected");
+function setTool(tool) {
+  isErasing = tool === "eraser";
+  isHighlighting = tool === "highlighter";
+  penBtn.classList.toggle("active", tool === "pen");
+  highlighterBtn.classList.toggle("active", tool === "highlighter");
+  eraserBtn.classList.toggle("active", tool === "eraser");
+  renderColorRow();
+}
+
+function renderColorRow() {
+  colorRow.innerHTML = "";
+  const palette = isHighlighting ? HIGHLIGHT_COLORS : COLORS;
+  if (isHighlighting && !HIGHLIGHT_COLORS.includes(drawColor)) drawColor = HIGHLIGHT_COLORS[0];
+  if (!isHighlighting && !COLORS.includes(drawColor)) drawColor = COLORS[0];
+  palette.forEach((color) => {
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = "color-swatch" + (color === drawColor ? " selected" : "");
+    swatch.style.background = color;
+    swatch.addEventListener("click", () => {
+      drawColor = color;
+      isErasing = false;
+      eraserBtn.classList.remove("active");
+      colorRow.querySelectorAll(".color-swatch").forEach((s) => s.classList.remove("selected"));
+      swatch.classList.add("selected");
+    });
+    colorRow.appendChild(swatch);
   });
-  colorRow.appendChild(swatch);
-});
+}
+renderColorRow();
+
+penBtn.addEventListener("click", () => setTool("pen"));
+highlighterBtn.addEventListener("click", () => setTool("highlighter"));
 
 document.querySelectorAll(".width-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -596,8 +720,7 @@ document.querySelectorAll(".width-btn").forEach((btn) => {
 });
 
 eraserBtn.addEventListener("click", () => {
-  isErasing = !isErasing;
-  eraserBtn.classList.toggle("active", isErasing);
+  setTool(isErasing ? "pen" : "eraser");
 });
 
 function ensureDrawing() {
@@ -624,10 +747,11 @@ function drawStroke(stroke) {
   if (stroke.points.length < 1) return;
   ctx.save();
   ctx.globalCompositeOperation = stroke.erase ? "destination-out" : "source-over";
+  ctx.globalAlpha = stroke.highlight ? 0.4 : 1;
   ctx.strokeStyle = stroke.color;
   ctx.lineWidth = stroke.width;
   ctx.lineJoin = "round";
-  ctx.lineCap = "round";
+  ctx.lineCap = stroke.highlight ? "square" : "round";
   ctx.beginPath();
   stroke.points.forEach((p, i) => {
     if (i === 0) ctx.moveTo(p.x, p.y);
@@ -645,7 +769,8 @@ function pointerPos(e) {
 canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(e.pointerId);
   const pos = pointerPos(e);
-  activeStroke = { points: [pos], color: drawColor, width: drawWidth, erase: isErasing };
+  const width = isHighlighting ? Math.max(drawWidth * 5, 18) : drawWidth;
+  activeStroke = { points: [pos], color: drawColor, width, erase: isErasing, highlight: isHighlighting };
   ensureDrawing().strokes.push(activeStroke);
 });
 
@@ -656,10 +781,11 @@ canvas.addEventListener("pointermove", (e) => {
   activeStroke.points.push(pos);
   ctx.save();
   ctx.globalCompositeOperation = activeStroke.erase ? "destination-out" : "source-over";
+  ctx.globalAlpha = activeStroke.highlight ? 0.4 : 1;
   ctx.strokeStyle = activeStroke.color;
   ctx.lineWidth = activeStroke.width;
   ctx.lineJoin = "round";
-  ctx.lineCap = "round";
+  ctx.lineCap = activeStroke.highlight ? "square" : "round";
   ctx.beginPath();
   ctx.moveTo(prev.x, prev.y);
   ctx.lineTo(pos.x, pos.y);
