@@ -1532,7 +1532,15 @@ function tableAddColumn() {
 function tableDelete() {
   const table = currentTable();
   if (!table) return;
+  const parent = table.parentNode;
+  const next = table.nextSibling;
+  const clone = table.cloneNode(true);
   table.remove();
+  scheduleSave();
+  showToast("Tableau supprimé", () => {
+    parent.insertBefore(clone, next);
+    scheduleSave();
+  });
 }
 
 function currentCell() {
@@ -1554,8 +1562,21 @@ function tableDeleteRow() {
   if (!table) return;
   const cell = currentCell();
   const row = cell && table.contains(cell) ? cell.closest("tr") : table.rows[table.rows.length - 1];
-  if (row) row.remove();
+  if (!row) return;
+  const parent = row.parentNode;
+  const next = row.nextSibling;
+  const clone = row.cloneNode(true);
+  const tableParent = table.parentNode;
+  const tableNext = table.nextSibling;
+  const wholeTable = table.rows.length <= 1 ? table.cloneNode(true) : null;
+  row.remove();
   if (!table.rows.length) table.remove();
+  scheduleSave();
+  showToast("Ligne supprimée", () => {
+    if (wholeTable) tableParent.insertBefore(wholeTable, tableNext);
+    else parent.insertBefore(clone, next);
+    scheduleSave();
+  });
 }
 
 function tableDeleteColumn() {
@@ -1569,10 +1590,31 @@ function tableDeleteColumn() {
       ? table.rows[0].cells.length - 1
       : -1;
   if (colIndex < 0) return;
+  const willEmpty = table.rows[0] && table.rows[0].cells.length <= 1;
+  const tableParent = table.parentNode;
+  const tableNext = table.nextSibling;
+  const wholeTable = willEmpty ? table.cloneNode(true) : null;
+  const removed = willEmpty
+    ? null
+    : Array.from(table.rows).map((row) => {
+        const cellEl = row.cells[colIndex];
+        return cellEl ? { row, clone: cellEl.cloneNode(true), nextSibling: cellEl.nextSibling } : null;
+      });
   Array.from(table.rows).forEach((row) => {
     if (row.cells[colIndex]) row.cells[colIndex].remove();
   });
-  if (table.rows[0] && table.rows[0].cells.length === 0) table.remove();
+  if (willEmpty) table.remove();
+  scheduleSave();
+  showToast("Colonne supprimée", () => {
+    if (wholeTable) {
+      tableParent.insertBefore(wholeTable, tableNext);
+    } else {
+      removed.forEach((entry) => {
+        if (entry) entry.row.insertBefore(entry.clone, entry.nextSibling);
+      });
+    }
+    scheduleSave();
+  });
 }
 
 textEditor.addEventListener("change", (e) => {
