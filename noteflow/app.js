@@ -131,6 +131,52 @@ sortSelect.addEventListener("change", () => {
   renderList();
 });
 
+// --- Export / Import ---
+const exportBtn = document.getElementById("export-btn");
+const importBtn = document.getElementById("import-btn");
+const importInput = document.getElementById("import-input");
+
+exportBtn.addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(notes, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `noteflow-export-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+importBtn.addEventListener("click", () => importInput.click());
+
+importInput.addEventListener("change", async () => {
+  const file = importInput.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const imported = JSON.parse(text);
+    if (!Array.isArray(imported)) throw new Error("format invalide");
+    let added = 0;
+    let updated = 0;
+    for (const note of imported) {
+      if (!note || !note.id) continue;
+      const index = notes.findIndex((n) => n.id === note.id);
+      if (index === -1) {
+        notes.push(note);
+        added++;
+      } else if ((note.updatedAt || 0) > (notes[index].updatedAt || 0)) {
+        notes[index] = note;
+        updated++;
+      }
+      await persistNote(note);
+    }
+    renderList();
+    showToast(`Import terminé : ${added} ajoutée(s), ${updated} mise(s) à jour`);
+  } catch (err) {
+    showToast("Import impossible : fichier invalide");
+  }
+  importInput.value = "";
+});
+
 function stripHtml(html) {
   const div = document.createElement("div");
   div.innerHTML = html || "";
@@ -159,6 +205,22 @@ function allFolders() {
   return [...new Set(notes.map((n) => n.folder).filter(Boolean))];
 }
 
+let draggedNoteId = null;
+
+function reorderNotes(targetId) {
+  if (!draggedNoteId || draggedNoteId === targetId) return;
+  const fromIndex = notes.findIndex((n) => n.id === draggedNoteId);
+  const toIndex = notes.findIndex((n) => n.id === targetId);
+  if (fromIndex === -1 || toIndex === -1) return;
+  const [moved] = notes.splice(fromIndex, 1);
+  notes.splice(toIndex, 0, moved);
+  notes.forEach((n, i) => {
+    n.order = i;
+    persistNote(n);
+  });
+  renderList();
+}
+
 function renderFolderFilters() {
   const folders = allFolders();
   folderFiltersEl.classList.toggle("hidden", folders.length === 0);
@@ -172,8 +234,34 @@ function renderFolderFilters() {
       activeFolderFilter = activeFolderFilter === folder ? null : folder;
       renderList();
     });
+    chip.addEventListener("dragover", (e) => e.preventDefault());
+    chip.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (!draggedNoteId) return;
+      const note = notes.find((n) => n.id === draggedNoteId);
+      if (note) {
+        note.folder = folder;
+        persistNote(note);
+        renderList();
+      }
+    });
     folderFiltersEl.appendChild(chip);
   });
+}
+
+function escapeHtml(str) {
+  return str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function highlightMatch(text, query) {
+  if (!query) return escapeHtml(text);
+  const idx = text.toLowerCase().indexOf(query);
+  if (idx === -1) return escapeHtml(text);
+  return (
+    escapeHtml(text.slice(0, idx)) +
+    "<mark>" + escapeHtml(text.slice(idx, idx + query.length)) + "</mark>" +
+    escapeHtml(text.slice(idx + query.length))
+  );
 }
 
 function renderList() {
@@ -182,7 +270,7 @@ function renderList() {
   let visible = notes.filter((n) => {
     if (activeFolderFilter && n.folder !== activeFolderFilter) return false;
     if (query) {
-      const haystack = (n.title + " " + stripHtml(n.html)).toLowerCase();
+      const haystack = (n.title + " " + (n.folder || "") + " " + (n.locked ? "" : stripHtml(n.html))).toLowerCase();
       if (!haystack.includes(query)) return false;
     }
     return true;
@@ -190,19 +278,24 @@ function renderList() {
 
   visible.sort((a, b) => {
     if (!!b.pinned - !!a.pinned !== 0) return !!b.pinned - !!a.pinned;
+    if (sortMode === "manual") return (a.order ?? 0) - (b.order ?? 0);
     if (sortMode === "title") return (a.title || "").localeCompare(b.title || "", "fr");
     if (sortMode === "created") return b.createdAt - a.createdAt;
     return b.updatedAt - a.updatedAt;
   });
 
+  notesListEl.classList.toggle("manual-mode", sortMode === "manual");
   notesListEl.innerHTML = "";
   notesEmptyEl.classList.toggle("show", visible.length === 0);
 
   visible.forEach((note) => {
     const li = document.createElement("li");
     li.className = "note-item";
-    const preview = stripHtml(note.html) || (note.drawing && note.drawing.strokes.length ? "🖊️ Dessin" : "Note vide");
+    const preview = note.locked
+      ? "🔒 Note verrouillée"
+      : stripHtml(note.html) || (note.drawing && note.drawing.strokes.length ? "🖊️ Dessin" : "Note vide");
     li.innerHTML = `
+      <span class="drag-handle" aria-hidden="true">⠿</span>
       <div class="note-main">
         <div class="note-title"></div>
         <div class="note-preview"></div>
@@ -212,9 +305,16 @@ function renderList() {
       </div>
       <button class="note-delete" aria-label="Supprimer">✕</button>
     `;
-    li.querySelector(".note-title").textContent = (note.pinned ? "📌 " : "") + (note.title || "Sans titre");
-    li.querySelector(".note-preview").textContent = preview;
+    const titleText = (note.pinned ? "📌 " : "") + (note.locked ? "🔒 " : "") + (note.title || "Sans titre");
+    li.querySelector(".note-title").innerHTML = highlightMatch(titleText, query);
+    li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, query);
     li.querySelector(".note-date").textContent = timeAgo(note.updatedAt);
+    if (note.reminderAt && note.reminderAt > Date.now()) {
+      const rem = document.createElement("span");
+      rem.className = "note-reminder-chip";
+      rem.textContent = "🔔 " + new Date(note.reminderAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      li.querySelector(".note-meta").appendChild(rem);
+    }
     if (note.folder) {
       const chip = document.createElement("span");
       chip.className = "note-folder-chip";
@@ -226,6 +326,27 @@ function renderList() {
     li.querySelector(".note-delete").addEventListener("click", (e) => {
       e.stopPropagation();
       deleteNote(note.id);
+    });
+    li.draggable = true;
+    li.addEventListener("dragstart", () => {
+      draggedNoteId = note.id;
+      li.classList.add("dragging");
+    });
+    li.addEventListener("dragend", () => {
+      li.classList.remove("dragging");
+      draggedNoteId = null;
+    });
+    li.addEventListener("dragover", (e) => {
+      if (sortMode !== "manual") return;
+      e.preventDefault();
+      li.classList.add("drag-over");
+    });
+    li.addEventListener("dragleave", () => li.classList.remove("drag-over"));
+    li.addEventListener("drop", (e) => {
+      if (sortMode !== "manual") return;
+      e.preventDefault();
+      li.classList.remove("drag-over");
+      reorderNotes(note.id);
     });
     notesListEl.appendChild(li);
   });
@@ -272,9 +393,15 @@ function newNoteObject() {
     pinned: false,
     createdAt: now,
     updatedAt: now,
+    order: notes.length ? Math.min(...notes.map((n) => n.order ?? 0)) - 1 : 0,
     drawing: null,
     pageHeight: 700,
     fontSize: 15,
+    locked: false,
+    pinCode: null,
+    reminderAt: null,
+    reminderFired: false,
+    history: [],
   };
 }
 
@@ -288,6 +415,10 @@ function updateWordCount() {
 async function openNote(id) {
   currentNote = notes.find((n) => n.id === id);
   if (!currentNote) return;
+  if (currentNote.locked) {
+    showLockOverlay();
+    return;
+  }
   loadNoteIntoEditor();
   showEditor();
 }
@@ -297,11 +428,17 @@ function loadNoteIntoEditor() {
   folderInput.value = currentNote.folder || "";
   textEditor.innerHTML = currentNote.html || "";
   pinBtn.classList.toggle("active", !!currentNote.pinned);
+  lockBtn.textContent = currentNote.locked ? "🔒" : "🔓";
+  lockBtn.classList.toggle("active", !!currentNote.locked);
   saveIndicator.textContent = "";
   notePage.style.minHeight = (currentNote.pageHeight || 700) + "px";
   textEditor.style.minHeight = (currentNote.pageHeight || 700) + "px";
   textEditor.style.fontSize = (currentNote.fontSize || 15) + "px";
   sizeSelect.value = String(currentNote.fontSize || 15);
+  reminderPanel.classList.add("hidden");
+  historyPanel.classList.add("hidden");
+  reminderInput.value = currentNote.reminderAt ? toLocalDatetimeValue(currentNote.reminderAt) : "";
+  editorScreen.classList.remove("focus-mode");
   updateWordCount();
   setMode("text");
   setTimeout(() => {
@@ -366,12 +503,23 @@ function scheduleSave() {
   saveTimer = setTimeout(() => flushSave(false), 500);
 }
 
+function pushHistorySnapshot() {
+  if (!currentNote.history) currentNote.history = [];
+  currentNote.history.push({ title: currentNote.title, html: currentNote.html, ts: Date.now() });
+  if (currentNote.history.length > 20) currentNote.history.shift();
+}
+
 async function flushSave(immediate) {
   if (!currentNote) return;
   clearTimeout(saveTimer);
-  currentNote.title = titleInput.value.trim();
+  const newTitle = titleInput.value.trim();
+  const newHtml = textEditor.innerHTML;
+  if (immediate && (currentNote.html || "") !== newHtml && (currentNote.html || currentNote.title)) {
+    pushHistorySnapshot();
+  }
+  currentNote.title = newTitle;
   currentNote.folder = folderInput.value.trim();
-  currentNote.html = textEditor.innerHTML;
+  currentNote.html = newHtml;
   currentNote.updatedAt = Date.now();
   await persistNote(currentNote);
   if (!immediate) saveIndicator.textContent = "Enregistré";
@@ -405,6 +553,306 @@ function setMode(mode) {
 
 modeTextBtn.addEventListener("click", () => setMode("text"));
 modeDrawBtn.addEventListener("click", () => setMode("draw"));
+
+// --- Focus mode ---
+const focusBtn = document.getElementById("focus-btn");
+focusBtn.addEventListener("click", () => {
+  editorScreen.classList.toggle("focus-mode");
+});
+
+// --- PIN lock ---
+const lockBtn = document.getElementById("lock-btn");
+const lockOverlay = document.getElementById("lock-overlay");
+const lockInput = document.getElementById("lock-input");
+const lockError = document.getElementById("lock-error");
+const lockUnlockBtn = document.getElementById("lock-unlock-btn");
+const lockCancelBtn = document.getElementById("lock-cancel-btn");
+let pendingUnlockNoteId = null;
+
+async function hashPin(pin) {
+  const data = new TextEncoder().encode(pin);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function showLockOverlay() {
+  pendingUnlockNoteId = currentNote.id;
+  lockInput.value = "";
+  lockError.classList.add("hidden");
+  lockOverlay.classList.remove("hidden");
+  setTimeout(() => lockInput.focus(), 50);
+}
+
+async function attemptUnlock() {
+  const note = notes.find((n) => n.id === pendingUnlockNoteId);
+  if (!note) return;
+  const hash = await hashPin(lockInput.value);
+  if (hash === note.pinCode) {
+    lockOverlay.classList.add("hidden");
+    currentNote = note;
+    loadNoteIntoEditor();
+    showEditor();
+  } else {
+    lockError.classList.remove("hidden");
+    lockInput.value = "";
+    lockInput.focus();
+  }
+}
+
+lockUnlockBtn.addEventListener("click", attemptUnlock);
+lockInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") attemptUnlock();
+});
+lockCancelBtn.addEventListener("click", () => {
+  lockOverlay.classList.add("hidden");
+  pendingUnlockNoteId = null;
+  showList();
+});
+
+lockBtn.addEventListener("click", async () => {
+  if (!currentNote.locked) {
+    const pin = window.prompt("Choisis un code (4 chiffres ou plus) pour verrouiller cette note :");
+    if (!pin) return;
+    currentNote.pinCode = await hashPin(pin);
+    currentNote.locked = true;
+    lockBtn.textContent = "🔒";
+    lockBtn.classList.add("active");
+    scheduleSave();
+    showToast("Note verrouillée");
+  } else {
+    const pin = window.prompt("Entre le code pour retirer le verrou :");
+    if (pin === null) return;
+    const hash = await hashPin(pin);
+    if (hash === currentNote.pinCode) {
+      currentNote.locked = false;
+      currentNote.pinCode = null;
+      lockBtn.textContent = "🔓";
+      lockBtn.classList.remove("active");
+      scheduleSave();
+      showToast("Verrou retiré");
+    } else {
+      showToast("Code incorrect");
+    }
+  }
+});
+
+// --- Reminders (best-effort, only while the app is open) ---
+const reminderBtn = document.getElementById("reminder-btn");
+const reminderPanel = document.getElementById("reminder-panel");
+const reminderInput = document.getElementById("reminder-input");
+const reminderSaveBtn = document.getElementById("reminder-save-btn");
+const reminderClearBtn = document.getElementById("reminder-clear-btn");
+
+function toLocalDatetimeValue(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+reminderBtn.addEventListener("click", () => {
+  historyPanel.classList.add("hidden");
+  reminderPanel.classList.toggle("hidden");
+});
+
+reminderSaveBtn.addEventListener("click", () => {
+  if (!reminderInput.value) return;
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+  currentNote.reminderAt = new Date(reminderInput.value).getTime();
+  currentNote.reminderFired = false;
+  scheduleSave();
+  reminderPanel.classList.add("hidden");
+  showToast("Rappel programmé");
+});
+
+reminderClearBtn.addEventListener("click", () => {
+  currentNote.reminderAt = null;
+  currentNote.reminderFired = false;
+  reminderInput.value = "";
+  scheduleSave();
+  showToast("Rappel supprimé");
+});
+
+setInterval(() => {
+  const now = Date.now();
+  notes.forEach((note) => {
+    if (note.reminderAt && !note.reminderFired && note.reminderAt <= now) {
+      note.reminderFired = true;
+      persistNote(note);
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(note.title || "Rappel NoteFlow", { body: "Touche pour ouvrir ta note." });
+      } else {
+        showToast(`🔔 Rappel : ${note.title || "Sans titre"}`);
+      }
+      if (listScreen.classList.contains("active")) renderList();
+    }
+  });
+}, 30000);
+
+// --- Version history ---
+const historyBtn = document.getElementById("history-btn");
+const historyPanel = document.getElementById("history-panel");
+const historyListEl = document.getElementById("history-list");
+
+historyBtn.addEventListener("click", () => {
+  reminderPanel.classList.add("hidden");
+  const opening = historyPanel.classList.contains("hidden");
+  historyPanel.classList.toggle("hidden");
+  if (opening) renderHistory();
+});
+
+function renderHistory() {
+  const history = currentNote.history || [];
+  historyListEl.innerHTML = "";
+  if (!history.length) {
+    historyListEl.innerHTML = '<li class="history-empty">Pas encore de version enregistrée.</li>';
+    return;
+  }
+  [...history].reverse().forEach((snap) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = new Date(snap.ts).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Restaurer";
+    btn.addEventListener("click", () => {
+      pushHistorySnapshot();
+      currentNote.title = snap.title;
+      currentNote.html = snap.html;
+      titleInput.value = snap.title || "";
+      textEditor.innerHTML = snap.html || "";
+      updateWordCount();
+      scheduleSave();
+      historyPanel.classList.add("hidden");
+      showToast("Version restaurée");
+    });
+    li.appendChild(label);
+    li.appendChild(btn);
+    historyListEl.appendChild(li);
+  });
+}
+
+// --- Markdown-style shortcuts while typing ---
+// Runs on "input" (after the space is already committed to the DOM). The line
+// is converted with direct DOM moves rather than execCommand("formatBlock"/
+// "insertUnorderedList"): on a collapsed caret those commands proved unreliable
+// (no-op on the first line of a fresh note, or wrapping unrelated content).
+function placeCaretAtEnd(el) {
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+function currentLineBlock(node) {
+  const el = node.nodeType === 3 ? node.parentElement : node;
+  const block = el && el.closest ? el.closest("p, div, h2, li") : null;
+  return block && block !== textEditor ? block : null;
+}
+
+function convertLineToHeading() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  const block = currentLineBlock(sel.getRangeAt(0).startContainer);
+  const h2 = document.createElement("h2");
+  if (block) {
+    h2.append(...block.childNodes);
+    block.replaceWith(h2);
+  } else {
+    h2.append(...textEditor.childNodes);
+    textEditor.appendChild(h2);
+  }
+  if (!h2.textContent) h2.innerHTML = "<br>";
+  placeCaretAtEnd(h2);
+}
+
+function convertLineToList(ordered) {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  const block = currentLineBlock(sel.getRangeAt(0).startContainer);
+  const li = document.createElement("li");
+  const list = document.createElement(ordered ? "ol" : "ul");
+  if (block) {
+    li.append(...block.childNodes);
+    list.appendChild(li);
+    block.replaceWith(list);
+  } else {
+    li.append(...textEditor.childNodes);
+    list.appendChild(li);
+    textEditor.appendChild(list);
+  }
+  if (!li.textContent) li.innerHTML = "<br>";
+  placeCaretAtEnd(li);
+}
+
+const LINE_SHORTCUTS = [
+  { re: /^#\s$/, action: () => convertLineToHeading() },
+  { re: /^[-*]\s$/, action: () => convertLineToList(false) },
+  { re: /^1\.\s$/, action: () => convertLineToList(true) },
+  { re: /^\[\s?\]\s$/, action: () => insertChecklistItem() },
+];
+
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = range.startOffset;
+  const textBefore = node.textContent.slice(0, offset);
+  const shortcut = LINE_SHORTCUTS.find((s) => s.re.test(textBefore));
+  if (!shortcut) return;
+  const r = document.createRange();
+  r.setStart(node, offset - textBefore.length);
+  r.setEnd(node, offset);
+  r.deleteContents();
+  sel.removeAllRanges();
+  sel.addRange(r);
+  shortcut.action();
+  scheduleSave();
+});
+
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = sel.getRangeAt(0).startOffset;
+  const text = node.textContent.slice(0, offset);
+  const boldMatch = text.match(/\*\*([^*]+)\*\*$/) || text.match(/__([^_]+)__$/);
+  const italicMatch = !boldMatch && (text.match(/(?:^|[^*])\*([^*]+)\*$/) || text.match(/(?:^|[^_])_([^_]+)_$/));
+  let match = boldMatch;
+  let tag = "b";
+  if (!match && italicMatch) {
+    match = italicMatch;
+    tag = "i";
+  }
+  if (!match) return;
+  const full = match[0];
+  const inner = match[1];
+  const range = document.createRange();
+  try {
+    const start = Math.max(0, offset - full.length);
+    range.setStart(node, start);
+    range.setEnd(node, offset);
+    range.deleteContents();
+    const el = document.createElement(tag);
+    el.textContent = inner;
+    range.insertNode(el);
+    const spacer = document.createTextNode("​");
+    el.parentNode.insertBefore(spacer, el.nextSibling);
+    range.setStart(spacer, 1);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch {
+    /* selection edge case: skip silently */
+  }
+});
 
 growPageBtn.addEventListener("click", () => {
   currentNote.pageHeight = (currentNote.pageHeight || 700) + 400;
@@ -455,6 +903,10 @@ formatToolbar.addEventListener("click", (e) => {
     tableAddRow();
   } else if (cmd === "table-add-col") {
     tableAddColumn();
+  } else if (cmd === "table-delete-row") {
+    tableDeleteRow();
+  } else if (cmd === "table-delete-col") {
+    tableDeleteColumn();
   } else if (cmd === "table-delete") {
     tableDelete();
   } else {
@@ -630,6 +1082,46 @@ function tableDelete() {
   const table = currentTable();
   if (!table) return;
   table.remove();
+}
+
+function currentCell() {
+  const sources = [];
+  if (savedRange) sources.push(savedRange.startContainer);
+  const sel = window.getSelection();
+  if (sel.rangeCount) sources.push(sel.getRangeAt(0).startContainer);
+  for (const source of sources) {
+    let node = source;
+    if (node && node.nodeType === 3) node = node.parentElement;
+    const cell = node && node.closest ? node.closest("td") : null;
+    if (cell) return cell;
+  }
+  return null;
+}
+
+function tableDeleteRow() {
+  const table = currentTable();
+  if (!table) return;
+  const cell = currentCell();
+  const row = cell && table.contains(cell) ? cell.closest("tr") : table.rows[table.rows.length - 1];
+  if (row) row.remove();
+  if (!table.rows.length) table.remove();
+}
+
+function tableDeleteColumn() {
+  const table = currentTable();
+  if (!table) return;
+  const cell = currentCell();
+  const colIndex =
+    cell && table.contains(cell)
+      ? Array.from(cell.parentElement.children).indexOf(cell)
+      : table.rows[0]
+      ? table.rows[0].cells.length - 1
+      : -1;
+  if (colIndex < 0) return;
+  Array.from(table.rows).forEach((row) => {
+    if (row.cells[colIndex]) row.cells[colIndex].remove();
+  });
+  if (table.rows[0] && table.rows[0].cells.length === 0) table.remove();
 }
 
 textEditor.addEventListener("change", (e) => {

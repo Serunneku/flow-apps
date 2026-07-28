@@ -211,6 +211,8 @@ body {
 
 .topbar-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
   margin-left: auto;
 }
@@ -303,6 +305,68 @@ button {
 .search-input:focus {
   outline: none;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent), var(--shadow-sm);
+}
+
+.side-panel {
+  background: var(--surface-glass);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-md);
+  animation: fadeIn 0.2s var(--ease);
+}
+
+.panel-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-item button {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.history-empty {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+  padding: 12px 0;
 }
 
 .sync-panel {
@@ -449,7 +513,39 @@ button {
   padding: 14px;
   cursor: pointer;
   box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.2s var(--ease), transform 0.2s var(--ease);
+  transition: box-shadow 0.2s var(--ease), transform 0.2s var(--ease), opacity 0.15s var(--ease);
+}
+
+.note-item.dragging {
+  opacity: 0.4;
+}
+
+.note-item.drag-over {
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow-hover);
+}
+
+.drag-handle {
+  display: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+.notes-list.manual-mode .drag-handle {
+  display: block;
+}
+
+.notes-list.manual-mode .note-item {
+  cursor: grab;
+}
+
+.note-title mark,
+.note-preview mark {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
 }
 
 @media (hover: hover) {
@@ -504,6 +600,12 @@ button {
   border-radius: 999px;
   padding: 2px 9px;
   color: white;
+}
+
+.note-item .note-reminder-chip {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
 }
 
 .note-item .note-pin {
@@ -1042,4 +1144,93 @@ input:focus-visible,
 .toolbar::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--muted) 40%, transparent);
   border-radius: 999px;
+}
+
+/* --- Focus mode --- */
+#editor-screen.focus-mode .folder-row,
+#editor-screen.focus-mode .mode-switch,
+#editor-screen.focus-mode #format-toolbar,
+#editor-screen.focus-mode #draw-toolbar,
+#editor-screen.focus-mode .draw-hint,
+#editor-screen.focus-mode .grow-page-btn {
+  display: none !important;
+}
+
+#editor-screen.focus-mode .title-input {
+  text-align: center;
+}
+
+#editor-screen.focus-mode .note-page {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+#focus-btn.active,
+#editor-screen.focus-mode #focus-btn {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+/* --- Lock overlay --- */
+.lock-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.lock-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-page);
+  padding: 24px;
+  width: min(320px, 84vw);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: center;
+}
+
+.lock-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.lock-input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 15px;
+  text-align: center;
+  letter-spacing: 0.1em;
+}
+
+.lock-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.lock-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0;
+}
+
+.lock-box .sync-actions {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lock-box .sync-actions button:first-child {
+  width: 100%;
 }
