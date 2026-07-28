@@ -210,6 +210,12 @@ function showToast(message, onUndo) {
   toastTimer = setTimeout(() => toastEl.classList.add("hidden"), 5000);
 }
 
+function triggerToastUndo() {
+  if (toastEl.classList.contains("hidden") || toastUndo.classList.contains("hidden")) return false;
+  toastUndo.onclick();
+  return true;
+}
+
 // --- Screens ---
 const listScreen = document.getElementById("list-screen");
 const editorScreen = document.getElementById("editor-screen");
@@ -1709,6 +1715,7 @@ canvas.addEventListener("pointerdown", (e) => {
   const width = isHighlighting ? Math.max(drawWidth * 5, 18) : drawWidth;
   activeStroke = { points: [pos], color: drawColor, width, erase: isErasing, highlight: isHighlighting };
   ensureDrawing().strokes.push(activeStroke);
+  strokeRedoStack = [];
 });
 
 canvas.addEventListener("pointermove", (e) => {
@@ -1738,18 +1745,34 @@ function endStroke() {
 canvas.addEventListener("pointerup", endStroke);
 canvas.addEventListener("pointercancel", endStroke);
 
-undoStrokeBtn.addEventListener("click", () => {
+let strokeRedoStack = [];
+
+function undoLastStroke() {
   const drawing = ensureDrawing();
-  if (!drawing.strokes.length) return;
+  if (!drawing.strokes.length) return false;
   const removed = drawing.strokes.pop();
+  strokeRedoStack.push(removed);
   redrawStrokes();
   scheduleSave();
   showToast("Trait annulé", () => {
     drawing.strokes.push(removed);
+    strokeRedoStack.pop();
     redrawStrokes();
     scheduleSave();
   });
-});
+  return true;
+}
+
+function redoLastStroke() {
+  if (!strokeRedoStack.length) return false;
+  const restored = strokeRedoStack.pop();
+  ensureDrawing().strokes.push(restored);
+  redrawStrokes();
+  scheduleSave();
+  return true;
+}
+
+undoStrokeBtn.addEventListener("click", undoLastStroke);
 
 clearDrawBtn.addEventListener("click", () => {
   const drawing = ensureDrawing();
@@ -1916,9 +1939,25 @@ async function initSyncFromStorage() {
 
 // --- Keyboard shortcuts ---
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (!lockOverlay.classList.contains("hidden")) {
+      lockCancelBtn.click();
+      return;
+    }
+    [reminderPanel, historyPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
+  }
+
   const mod = e.metaKey || e.ctrlKey;
   if (!mod) return;
   const key = e.key.toLowerCase();
+
+  // Undo (Ctrl/Cmd+Z): an active "undo this action" toast (delete, archive,
+  // clear drawing…) always takes priority, on either screen.
+  if (key === "z" && !e.shiftKey && triggerToastUndo()) {
+    e.preventDefault();
+    return;
+  }
+
   if (listScreen.classList.contains("active")) {
     if (key === "n") {
       e.preventDefault();
@@ -1927,7 +1966,34 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault();
       searchInput.focus();
     }
+    return;
   }
+
+  if (!editorScreen.classList.contains("active")) return;
+
+  // Stroke undo/redo while drawing; otherwise let the browser's native
+  // text-editing undo inside the contenteditable handle Ctrl/Cmd+Z.
+  if (key === "z" && !e.shiftKey && notePage.classList.contains("mode-draw")) {
+    e.preventDefault();
+    undoLastStroke();
+    return;
+  }
+
+  if ((key === "z" && e.shiftKey) || key === "y") {
+    if (notePage.classList.contains("mode-draw")) {
+      e.preventDefault();
+      redoLastStroke();
+    }
+    return;
+  }
+
+  if (key === "s") {
+    e.preventDefault();
+    flushSave(false);
+  }
+  // Ctrl/Cmd+B, +I, +U are left to the browser's native contenteditable
+  // handling (calling execCommand ourselves on top of it double-toggles
+  // the formatting back off).
 });
 
 // --- Init ---
