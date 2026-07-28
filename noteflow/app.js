@@ -110,6 +110,87 @@ document.addEventListener("keydown", (e) => {
 setupMenu("list-menu-btn", "list-menu");
 setupMenu("editor-menu-btn", "editor-menu");
 
+// --- Custom dropdowns (native <select> stays as the source of truth; this
+// only replaces how it's presented, so all existing "change" logic keeps working) ---
+function enhanceSelect(select) {
+  const wrap = document.createElement("div");
+  wrap.className = "custom-select";
+  if (select.id) wrap.dataset.for = select.id;
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+  select.classList.add("native-select-hidden");
+  select.setAttribute("tabindex", "-1");
+  select.setAttribute("aria-hidden", "true");
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "custom-select-trigger";
+  if (select.title) trigger.title = select.title;
+  wrap.appendChild(trigger);
+
+  const list = document.createElement("div");
+  list.className = "custom-select-list hidden";
+  wrap.appendChild(list);
+
+  function renderOptions() {
+    list.innerHTML = "";
+    Array.from(select.options).forEach((opt, i) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "custom-select-option" + (i === select.selectedIndex ? " selected" : "");
+      item.textContent = opt.textContent;
+      if (opt.style.fontFamily) item.style.fontFamily = opt.style.fontFamily;
+      item.addEventListener("click", () => {
+        select.value = opt.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        refresh();
+        closeList();
+      });
+      list.appendChild(item);
+    });
+  }
+  function updateTrigger() {
+    const opt = select.options[select.selectedIndex];
+    trigger.textContent = opt ? opt.textContent : "";
+  }
+  function closeList() {
+    list.classList.add("hidden");
+    trigger.classList.remove("open");
+  }
+  function openList() {
+    renderOptions();
+    list.classList.remove("hidden");
+    trigger.classList.add("open");
+  }
+  function refresh() {
+    updateTrigger();
+    if (!list.classList.contains("hidden")) renderOptions();
+  }
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.querySelectorAll(".custom-select-list").forEach((l) => {
+      if (l !== list) l.classList.add("hidden");
+    });
+    if (list.classList.contains("hidden")) openList();
+    else closeList();
+  });
+  document.addEventListener("click", (e) => {
+    if (!wrap.contains(e.target)) closeList();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeList();
+  });
+
+  updateTrigger();
+  select._customSelectRefresh = refresh;
+  return refresh;
+}
+
+document.addEventListener("mousedown", (e) => {
+  if (e.target.closest(".custom-select-trigger, .custom-select-option")) e.preventDefault();
+});
+
 // --- Toast (with optional undo) ---
 const toastEl = document.getElementById("toast");
 const toastText = document.getElementById("toast-text");
@@ -157,6 +238,7 @@ sortSelect.addEventListener("change", () => {
   savePref(PREF_KEYS.sort, sortMode);
   renderList();
 });
+enhanceSelect(sortSelect);
 
 // --- Export / Import ---
 const exportBtn = document.getElementById("export-btn");
@@ -488,6 +570,7 @@ const newNoteBtn = document.getElementById("new-note-btn");
 const duplicateNoteBtn = document.getElementById("duplicate-note-btn");
 const wordCountEl = document.getElementById("word-count");
 const sizeSelect = document.getElementById("size-select");
+enhanceSelect(sizeSelect);
 
 function newNoteObject() {
   const now = Date.now();
@@ -545,6 +628,7 @@ function loadNoteIntoEditor() {
   textEditor.style.minHeight = (currentNote.pageHeight || 700) + "px";
   textEditor.style.fontSize = (currentNote.fontSize || 15) + "px";
   sizeSelect.value = String(currentNote.fontSize || 15);
+  if (sizeSelect._customSelectRefresh) sizeSelect._customSelectRefresh();
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
   colorPanel.classList.add("hidden");
@@ -1173,6 +1257,7 @@ FONTS.forEach((f) => {
   opt.style.fontFamily = f.value || "inherit";
   fontSelect.appendChild(opt);
 });
+enhanceSelect(fontSelect);
 fontSelect.addEventListener("mousedown", (e) => e.stopPropagation());
 fontSelect.addEventListener("change", () => {
   restoreSelection();
@@ -1195,10 +1280,12 @@ function updateFontSelectState() {
   const currentFirst = firstFontToken(current);
   const match = FONTS.find((f) => f.value && firstFontToken(f.value) === currentFirst);
   fontSelect.value = match ? match.value : "";
+  if (fontSelect._customSelectRefresh) fontSelect._customSelectRefresh();
 }
 
 // --- Block style (heading levels) ---
 const styleSelect = document.getElementById("style-select");
+enhanceSelect(styleSelect);
 styleSelect.addEventListener("mousedown", (e) => e.stopPropagation());
 styleSelect.addEventListener("change", () => {
   restoreSelection();
@@ -1215,6 +1302,7 @@ function updateStyleSelectState() {
   }
   if (!["p", "h1", "h2", "h3"].includes(value)) value = "p";
   styleSelect.value = value;
+  if (styleSelect._customSelectRefresh) styleSelect._customSelectRefresh();
 }
 
 // --- Links ---
