@@ -64,6 +64,7 @@ let notes = [];
 let currentNote = null;
 let searchQuery = "";
 let activeFolderFilter = null;
+let listView = "active"; // "active" | "archived" | "trash"
 
 // --- Theme ---
 const themeToggle = document.getElementById("theme-toggle");
@@ -82,6 +83,32 @@ themeToggle.addEventListener("click", () => {
   savePref(PREF_KEYS.theme, theme);
   applyTheme(theme);
 });
+
+// --- Overflow menus (list + editor "more" menus) ---
+function setupMenu(btnId, panelId) {
+  const btn = document.getElementById(btnId);
+  const panel = document.getElementById(panelId);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const willOpen = panel.classList.contains("hidden");
+    document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+    if (willOpen) panel.classList.remove("hidden");
+  });
+  panel.addEventListener("click", (e) => {
+    if (e.target.closest(".menu-item")) panel.classList.add("hidden");
+  });
+  return panel;
+}
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".menu-wrap")) {
+    document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+});
+setupMenu("list-menu-btn", "list-menu");
+setupMenu("editor-menu-btn", "editor-menu");
 
 // --- Toast (with optional undo) ---
 const toastEl = document.getElementById("toast");
@@ -264,10 +291,29 @@ function highlightMatch(text, query) {
   );
 }
 
+const viewBanner = document.getElementById("view-banner");
+const viewBannerTitle = document.getElementById("view-banner-title");
+const viewBannerClose = document.getElementById("view-banner-close");
+const VIEW_LABEL = { archived: "Archives", trash: "Corbeille" };
+
+function setListView(view) {
+  listView = view;
+  activeFolderFilter = null;
+  viewBanner.classList.toggle("hidden", view === "active");
+  viewBannerTitle.textContent = VIEW_LABEL[view] || "";
+  renderList();
+}
+viewBannerClose.addEventListener("click", () => setListView("active"));
+document.getElementById("view-archive-btn").addEventListener("click", () => setListView("archived"));
+document.getElementById("view-trash-btn").addEventListener("click", () => setListView("trash"));
+
 function renderList() {
   renderFolderFilters();
   const query = searchQuery.trim().toLowerCase();
   let visible = notes.filter((n) => {
+    if (listView === "trash" && !n.deletedAt) return false;
+    if (listView === "archived" && (!n.archived || n.deletedAt)) return false;
+    if (listView === "active" && (n.archived || n.deletedAt)) return false;
     if (activeFolderFilter && n.folder !== activeFolderFilter) return false;
     if (query) {
       const haystack = (n.title + " " + (n.folder || "") + " " + (n.locked ? "" : stripHtml(n.html))).toLowerCase();
@@ -297,6 +343,12 @@ function renderList() {
     const badges =
       (note.pinned ? '<svg class="icon note-badge"><use href="#icon-pin"/></svg>' : "") +
       (note.locked ? '<svg class="icon note-badge"><use href="#icon-lock-closed"/></svg>' : "");
+    const actions =
+      listView === "trash"
+        ? '<button class="note-action" data-action="restore" aria-label="Restaurer"><svg class="icon"><use href="#icon-undo"/></svg></button><button class="note-action danger" data-action="purge" aria-label="Supprimer définitivement"><svg class="icon"><use href="#icon-close"/></svg></button>'
+        : listView === "archived"
+        ? '<button class="note-action" data-action="unarchive" aria-label="Désarchiver"><svg class="icon"><use href="#icon-unarchive"/></svg></button>'
+        : '<button class="note-action" data-action="delete" aria-label="Supprimer"><svg class="icon"><use href="#icon-close"/></svg></button>';
     li.innerHTML = `
       <span class="drag-handle" aria-hidden="true">⠿</span>
       <div class="note-main">
@@ -306,8 +358,9 @@ function renderList() {
           <span class="note-date"></span>
         </div>
       </div>
-      <button class="note-delete" aria-label="Supprimer"><svg class="icon"><use href="#icon-close"/></svg></button>
+      <div class="note-actions">${actions}</div>
     `;
+    if (note.color) li.style.backgroundColor = note.color;
     li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", query);
     li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, query);
     li.querySelector(".note-date").textContent = timeAgo(note.updatedAt);
@@ -326,10 +379,22 @@ function renderList() {
       chip.textContent = note.folder;
       li.querySelector(".note-meta").appendChild(chip);
     }
-    li.querySelector(".note-main").addEventListener("click", () => openNote(note.id));
-    li.querySelector(".note-delete").addEventListener("click", (e) => {
+    li.querySelector(".note-main").addEventListener("click", () => {
+      if (listView === "trash") {
+        showToast("Restaure la note pour l'ouvrir");
+        return;
+      }
+      openNote(note.id);
+    });
+    li.querySelector(".note-actions").addEventListener("click", (e) => {
       e.stopPropagation();
-      deleteNote(note.id);
+      const btn = e.target.closest(".note-action");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === "delete") deleteNote(note.id);
+      else if (action === "restore") restoreNote(note.id);
+      else if (action === "purge") permanentlyDeleteNote(note.id);
+      else if (action === "unarchive") setNoteArchived(note.id, false);
     });
     li.draggable = true;
     li.addEventListener("dragstart", () => {
@@ -361,17 +426,54 @@ searchInput.addEventListener("input", () => {
   renderList();
 });
 
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 async function deleteNote(id) {
+  const note = notes.find((n) => n.id === id);
+  if (!note) return;
+  note.deletedAt = Date.now();
+  await persistNote(note);
+  renderList();
+  showToast("Note déplacée dans la corbeille", async () => {
+    note.deletedAt = null;
+    await persistNote(note);
+    renderList();
+  });
+}
+
+async function restoreNote(id) {
+  const note = notes.find((n) => n.id === id);
+  if (!note) return;
+  note.deletedAt = null;
+  await persistNote(note);
+  renderList();
+  showToast("Note restaurée");
+}
+
+async function permanentlyDeleteNote(id) {
   const index = notes.findIndex((n) => n.id === id);
-  const removed = notes[index];
+  if (index === -1) return;
   notes = notes.filter((n) => n.id !== id);
   await removeNoteEverywhere(id);
   renderList();
-  showToast("Note supprimée", async () => {
-    notes.splice(index, 0, removed);
-    await persistNote(removed);
-    renderList();
-  });
+  showToast("Note supprimée définitivement");
+}
+
+async function setNoteArchived(id, archived) {
+  const note = notes.find((n) => n.id === id);
+  if (!note) return;
+  note.archived = archived;
+  await persistNote(note);
+  renderList();
+  showToast(archived ? "Note archivée" : "Note désarchivée");
+}
+
+async function purgeOldTrash() {
+  const cutoff = Date.now() - TRASH_RETENTION_MS;
+  const toPurge = notes.filter((n) => n.deletedAt && n.deletedAt < cutoff);
+  if (!toPurge.length) return;
+  notes = notes.filter((n) => !(n.deletedAt && n.deletedAt < cutoff));
+  await Promise.all(toPurge.map((n) => removeNoteEverywhere(n.id)));
 }
 
 // --- Editor ---
@@ -406,6 +508,10 @@ function newNoteObject() {
     reminderAt: null,
     reminderFired: false,
     history: [],
+    color: null,
+    paperStyle: "blank",
+    archived: false,
+    deletedAt: null,
   };
 }
 
@@ -441,8 +547,16 @@ function loadNoteIntoEditor() {
   sizeSelect.value = String(currentNote.fontSize || 15);
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
+  colorPanel.classList.add("hidden");
+  paperPanel.classList.add("hidden");
+  findPanel.classList.add("hidden");
   reminderInput.value = currentNote.reminderAt ? toLocalDatetimeValue(currentNote.reminderAt) : "";
   editorScreen.classList.remove("focus-mode");
+  notePage.style.backgroundColor = currentNote.color || "";
+  notePage.dataset.paper = currentNote.paperStyle || "blank";
+  updateNoteColorSelection();
+  updatePaperStyleSelection();
+  updateArchiveMenuItem();
   updateWordCount();
   setMode("text");
   setTimeout(() => {
@@ -498,6 +612,98 @@ deleteNoteBtn.addEventListener("click", () => {
   const id = currentNote.id;
   showList();
   deleteNote(id);
+});
+
+// --- Archive ---
+const archiveBtn = document.getElementById("archive-btn");
+function updateArchiveMenuItem() {
+  archiveBtn.innerHTML = currentNote.archived
+    ? '<svg class="icon"><use href="#icon-unarchive"/></svg>Désarchiver'
+    : '<svg class="icon"><use href="#icon-archive"/></svg>Archiver';
+}
+archiveBtn.addEventListener("click", async () => {
+  const archived = !currentNote.archived;
+  await setNoteArchived(currentNote.id, archived);
+  showList();
+});
+
+// --- Print / export to PDF ---
+document.getElementById("print-btn").addEventListener("click", () => {
+  flushSave(true);
+  window.print();
+});
+
+// --- Note background color ---
+const colorPanel = document.getElementById("color-panel");
+const noteColorRow = document.getElementById("note-color-row");
+const NOTE_COLORS = [
+  { key: null, label: "Aucune" },
+  { key: "rgba(255, 214, 10, 0.18)", label: "Jaune" },
+  { key: "rgba(255, 149, 0, 0.18)", label: "Orange" },
+  { key: "rgba(255, 69, 58, 0.15)", label: "Rouge" },
+  { key: "rgba(255, 55, 95, 0.13)", label: "Rose" },
+  { key: "rgba(191, 90, 242, 0.15)", label: "Violet" },
+  { key: "rgba(10, 132, 255, 0.15)", label: "Bleu" },
+  { key: "rgba(52, 199, 89, 0.15)", label: "Vert" },
+];
+NOTE_COLORS.forEach((c) => {
+  const swatch = document.createElement("button");
+  swatch.type = "button";
+  swatch.className = "color-swatch note-color-swatch";
+  swatch.title = c.label;
+  swatch.style.background = c.key || "var(--paper)";
+  swatch.dataset.color = c.key || "";
+  swatch.addEventListener("click", () => {
+    currentNote.color = c.key;
+    notePage.style.backgroundColor = c.key || "";
+    updateNoteColorSelection();
+    scheduleSave();
+  });
+  noteColorRow.appendChild(swatch);
+});
+function updateNoteColorSelection() {
+  const current = currentNote.color || "";
+  noteColorRow.querySelectorAll(".note-color-swatch").forEach((s) => {
+    s.classList.toggle("selected", s.dataset.color === current);
+  });
+}
+document.getElementById("color-btn").addEventListener("click", () => {
+  paperPanel.classList.add("hidden");
+  colorPanel.classList.toggle("hidden");
+});
+
+// --- Paper style ---
+const paperPanel = document.getElementById("paper-panel");
+const paperStyleRow = document.getElementById("paper-style-row");
+const PAPER_STYLES = [
+  { key: "blank", label: "Blanc" },
+  { key: "lined", label: "Ligné" },
+  { key: "grid", label: "Grille" },
+  { key: "dots", label: "Points" },
+];
+PAPER_STYLES.forEach((p) => {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "paper-style-btn";
+  btn.dataset.paper = p.key;
+  btn.innerHTML = `<span class="paper-style-preview" data-paper="${p.key}"></span><span>${p.label}</span>`;
+  btn.addEventListener("click", () => {
+    currentNote.paperStyle = p.key;
+    notePage.dataset.paper = p.key;
+    updatePaperStyleSelection();
+    scheduleSave();
+  });
+  paperStyleRow.appendChild(btn);
+});
+function updatePaperStyleSelection() {
+  const current = currentNote.paperStyle || "blank";
+  paperStyleRow.querySelectorAll(".paper-style-btn").forEach((b) => {
+    b.classList.toggle("selected", b.dataset.paper === current);
+  });
+}
+document.getElementById("paper-btn").addEventListener("click", () => {
+  colorPanel.classList.add("hidden");
+  paperPanel.classList.toggle("hidden");
 });
 
 let saveTimer = null;
@@ -900,11 +1106,12 @@ formatToolbar.addEventListener("click", (e) => {
   if (!btn) return;
   restoreSelection();
   const cmd = btn.dataset.cmd;
-  if (cmd === "heading") {
-    const isHeading = document.queryCommandValue("formatBlock") === "h2";
-    document.execCommand("formatBlock", false, isHeading ? "p" : "h2");
-  } else if (cmd === "checklist") {
+  if (cmd === "checklist") {
     insertChecklistItem();
+  } else if (cmd === "link") {
+    insertLink();
+  } else if (cmd === "image") {
+    imageInput.click();
   } else if (cmd === "table") {
     insertTable();
   } else if (cmd === "table-add-row") {
@@ -989,6 +1196,148 @@ function updateFontSelectState() {
   const match = FONTS.find((f) => f.value && firstFontToken(f.value) === currentFirst);
   fontSelect.value = match ? match.value : "";
 }
+
+// --- Block style (heading levels) ---
+const styleSelect = document.getElementById("style-select");
+styleSelect.addEventListener("mousedown", (e) => e.stopPropagation());
+styleSelect.addEventListener("change", () => {
+  restoreSelection();
+  document.execCommand("formatBlock", false, styleSelect.value);
+  scheduleSave();
+  updateStyleSelectState();
+});
+function updateStyleSelectState() {
+  let value = "p";
+  try {
+    value = (document.queryCommandValue("formatBlock") || "p").toLowerCase();
+  } catch {
+    value = "p";
+  }
+  if (!["p", "h1", "h2", "h3"].includes(value)) value = "p";
+  styleSelect.value = value;
+}
+
+// --- Links ---
+function insertLink() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) {
+    showToast("Sélectionne du texte pour créer un lien");
+    return;
+  }
+  let url = window.prompt("Adresse du lien :", "https://");
+  if (!url) return;
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  document.execCommand("createLink", false, url);
+}
+
+// --- Images (toolbar insert + paste) ---
+const imageInput = document.getElementById("image-input");
+
+function insertImageFile(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    restoreSelection();
+    const img = document.createElement("img");
+    img.src = reader.result;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
+      const range = sel.getRangeAt(0);
+      range.collapse(false);
+      range.insertNode(img);
+      range.setStartAfter(img);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      textEditor.appendChild(img);
+    }
+    scheduleSave();
+  };
+  reader.readAsDataURL(file);
+}
+
+imageInput.addEventListener("change", () => {
+  if (imageInput.files[0]) insertImageFile(imageInput.files[0]);
+  imageInput.value = "";
+});
+
+textEditor.addEventListener("paste", (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      e.preventDefault();
+      insertImageFile(item.getAsFile());
+      return;
+    }
+  }
+});
+
+// --- Find & replace ---
+const findPanel = document.getElementById("find-panel");
+const findInput = document.getElementById("find-input");
+const replaceInput = document.getElementById("replace-input");
+const findCount = document.getElementById("find-count");
+const replaceAllBtn = document.getElementById("replace-all-btn");
+
+function countMatches(term) {
+  if (!term) return 0;
+  const text = textEditor.textContent.toLowerCase();
+  const needle = term.toLowerCase();
+  let count = 0;
+  let pos = 0;
+  while ((pos = text.indexOf(needle, pos)) !== -1) {
+    count++;
+    pos += needle.length;
+  }
+  return count;
+}
+
+function updateFindCount() {
+  const term = findInput.value;
+  if (!term) {
+    findCount.textContent = "";
+    return;
+  }
+  const n = countMatches(term);
+  findCount.textContent = n ? `${n} résultat${n > 1 ? "s" : ""}` : "Aucun résultat";
+}
+
+findInput.addEventListener("input", updateFindCount);
+
+document.getElementById("find-btn").addEventListener("click", () => {
+  findPanel.classList.toggle("hidden");
+  if (!findPanel.classList.contains("hidden")) {
+    findInput.focus();
+    updateFindCount();
+  }
+});
+document.getElementById("find-close-btn").addEventListener("click", () => findPanel.classList.add("hidden"));
+
+replaceAllBtn.addEventListener("click", () => {
+  const term = findInput.value;
+  if (!term) return;
+  const replacement = replaceInput.value;
+  const walker = document.createTreeWalker(textEditor, NodeFilter.SHOW_TEXT);
+  const needle = term.toLowerCase();
+  let replaced = 0;
+  const nodes = [];
+  let node;
+  while ((node = walker.nextNode())) nodes.push(node);
+  nodes.forEach((n) => {
+    if (n.textContent.toLowerCase().includes(needle)) {
+      const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+      const matches = n.textContent.match(re);
+      if (matches) replaced += matches.length;
+      n.textContent = n.textContent.replace(re, replacement);
+    }
+  });
+  scheduleSave();
+  updateWordCount();
+  updateFindCount();
+  showToast(replaced ? `${replaced} remplacement${replaced > 1 ? "s" : ""}` : "Aucun résultat");
+});
 
 function insertChecklistItem() {
   const sel = window.getSelection();
@@ -1145,8 +1494,7 @@ function updateToolbarState() {
     const cmd = btn.dataset.cmd;
     let active = false;
     try {
-      if (cmd === "heading") active = document.queryCommandValue("formatBlock") === "h2";
-      else if (cmd === "checklist") active = false;
+      if (cmd === "checklist" || cmd === "link" || cmd === "image") active = false;
       else active = document.queryCommandState(cmd);
     } catch {
       active = false;
@@ -1154,6 +1502,7 @@ function updateToolbarState() {
     btn.classList.toggle("active", active);
   });
   updateFontSelectState();
+  updateStyleSelectState();
 }
 textEditor.addEventListener("keyup", updateToolbarState);
 textEditor.addEventListener("mouseup", updateToolbarState);
@@ -1496,6 +1845,7 @@ document.addEventListener("keydown", (e) => {
 // --- Init ---
 (async () => {
   notes = await dbGetAll();
+  await purgeOldTrash();
   showList();
   initSyncFromStorage();
 })();
