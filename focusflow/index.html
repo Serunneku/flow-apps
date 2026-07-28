@@ -1,0 +1,108 @@
+<meta charset="UTF-8" />
+<title>FocusFlow</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="FocusFlow" />
+<link rel="apple-touch-icon" href="icons/icon-180.png" />
+<link rel="manifest" href="manifest.json" />
+<link rel="stylesheet" href="style.css" />
+
+<div class="app" id="app">
+  <div id="onboarding" class="onboarding hidden">
+    <p>Bienvenue sur FocusFlow 👋 Ajoute ta première tâche ci-dessous, ou passe à l'onglet Habitudes pour suivre une routine quotidienne.</p>
+    <button id="onboarding-dismiss" type="button">Compris</button>
+  </div>
+
+  <header class="topbar">
+    <div>
+      <h1>FocusFlow</h1>
+      <div class="date" id="today"></div>
+    </div>
+    <div class="topbar-actions">
+      <button id="density-toggle" class="icon-btn" type="button" aria-label="Densité d'affichage" title="Densité">📏</button>
+      <button id="theme-toggle" class="icon-btn" type="button" aria-label="Changer de thème" title="Thème">🌓</button>
+      <button id="menu-toggle" class="icon-btn" type="button" aria-label="Sauvegarde et restauration" title="Sauvegarde">⋯</button>
+    </div>
+  </header>
+
+  <div id="backup-menu" class="backup-menu hidden">
+    <button id="export-btn" type="button">⬇️ Exporter mes données</button>
+    <button id="import-btn" type="button">⬆️ Importer une sauvegarde</button>
+    <button id="copy-btn" type="button">📋 Copier la liste active en texte</button>
+    <input id="import-file" type="file" accept="application/json" class="hidden" />
+  </div>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="tasks" role="tab" aria-selected="true">Tâches</button>
+    <button class="tab" data-tab="habits" role="tab" aria-selected="false">Habitudes</button>
+    <button class="tab" data-tab="stats" role="tab" aria-selected="false">Stats</button>
+  </nav>
+
+  <main>
+    <section id="tasks-panel" class="panel active">
+      <form id="task-form" class="add-row">
+        <input id="task-input" type="text" maxlength="200" placeholder="Ajouter une tâche… (⌘K)" autocomplete="off" />
+        <button type="submit" aria-label="Ajouter">+</button>
+      </form>
+
+      <input id="task-search" type="search" class="search-input" placeholder="🔎 Rechercher…" autocomplete="off" />
+
+      <div class="filter-row">
+        <div class="segmented" role="tablist" aria-label="Filtrer les tâches">
+          <button class="seg active" data-filter="all" type="button">Toutes</button>
+          <button class="seg" data-filter="active" type="button">Actives</button>
+          <button class="seg" data-filter="done" type="button">Terminées</button>
+        </div>
+        <button id="select-mode-btn" class="link-btn" type="button">Sélectionner</button>
+      </div>
+
+      <div id="tag-filters" class="tag-filters hidden"></div>
+
+      <div id="bulk-bar" class="bulk-bar hidden">
+        <span id="bulk-count" class="counter"></span>
+        <div class="bulk-actions">
+          <button id="bulk-done-btn" type="button">Terminer</button>
+          <button id="bulk-delete-btn" type="button">Supprimer</button>
+        </div>
+      </div>
+
+      <div class="list-meta">
+        <span id="task-counter" class="counter"></span>
+        <button id="clear-done-btn" class="link-btn hidden" type="button">Effacer les terminées</button>
+      </div>
+      <ul id="task-list" class="list" aria-live="polite"></ul>
+      <p id="task-empty" class="empty">Rien à faire pour l'instant ✨</p>
+    </section>
+
+    <section id="habits-panel" class="panel">
+      <form id="habit-form" class="add-row">
+        <input id="habit-input" type="text" maxlength="200" placeholder="Ajouter une habitude…" autocomplete="off" />
+        <button type="submit" aria-label="Ajouter">+</button>
+      </form>
+      <ul id="habit-list" class="list" aria-live="polite"></ul>
+      <p id="habit-empty" class="empty">Aucune habitude suivie pour l'instant 🌱</p>
+    </section>
+
+    <section id="stats-panel" class="panel">
+      <div id="stats-content"></div>
+    </section>
+  </main>
+
+  <div id="backup-reminder" class="backup-reminder hidden">
+    <span>💾 Pense à exporter une sauvegarde de tes données.</span>
+    <div class="backup-reminder-actions">
+      <button id="backup-reminder-export" type="button">Exporter</button>
+      <button id="backup-reminder-dismiss" type="button" aria-label="Fermer">✕</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status">
+    <span id="toast-text"></span>
+    <button id="toast-undo" type="button">Annuler</button>
+  </div>
+</div>
+
+<script src="app.js"></script>

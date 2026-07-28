@@ -1,0 +1,109 @@
+<meta charset="UTF-8" />
+<title>NoteFlow</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="NoteFlow" />
+<link rel="apple-touch-icon" href="icons/icon-180.png" />
+<link rel="manifest" href="manifest.json" />
+<link rel="stylesheet" href="style.css" />
+
+<div class="app" id="app">
+  <!-- List screen -->
+  <section id="list-screen" class="screen active">
+    <header class="topbar">
+      <h1>NoteFlow</h1>
+      <div class="topbar-actions">
+        <button id="sync-toggle" class="icon-btn" type="button" title="Synchronisation">☁️</button>
+        <button id="theme-toggle" class="icon-btn" type="button" title="Thème">🌓</button>
+        <button id="new-note-btn" class="icon-btn primary" type="button" title="Nouvelle note">+</button>
+      </div>
+    </header>
+
+    <div id="sync-panel" class="sync-panel hidden">
+      <p id="sync-status" class="sync-status">Synchronisation non configurée</p>
+      <label class="sync-label">Configuration Firebase (JSON)
+        <textarea id="sync-config-input" class="sync-textarea" placeholder='{"apiKey": "...", "authDomain": "...", "projectId": "...", ...}'></textarea>
+      </label>
+      <label class="sync-label">Code de synchronisation (le même sur tous tes appareils)
+        <input id="sync-code-input" type="text" class="sync-code-input" placeholder="ex: mon-code-secret-123" autocomplete="off" />
+      </label>
+      <div class="sync-actions">
+        <button id="sync-save-btn" type="button">Activer la synchronisation</button>
+        <button id="sync-disable-btn" type="button" class="link-btn">Désactiver</button>
+      </div>
+    </div>
+
+    <input id="search-input" type="search" class="search-input" placeholder="🔎 Rechercher…" autocomplete="off" />
+
+    <div id="folder-filters" class="tag-filters hidden"></div>
+
+    <ul id="notes-list" class="notes-list"></ul>
+    <p id="notes-empty" class="empty">Aucune note pour l'instant. Touche "+" pour commencer ✏️</p>
+  </section>
+
+  <!-- Editor screen -->
+  <section id="editor-screen" class="screen">
+    <header class="topbar editor-topbar">
+      <button id="back-btn" class="icon-btn" type="button" aria-label="Retour">←</button>
+      <span id="save-indicator" class="save-indicator"></span>
+      <div class="topbar-actions">
+        <button id="pin-btn" class="icon-btn" type="button" title="Épingler">📌</button>
+        <button id="delete-note-btn" class="icon-btn" type="button" title="Supprimer">🗑️</button>
+      </div>
+    </header>
+
+    <input id="title-input" type="text" class="title-input" placeholder="Titre" maxlength="200" autocomplete="off" />
+    <input id="folder-input" type="text" class="folder-input" placeholder="Dossier (ex: Perso, Travail…)" maxlength="40" autocomplete="off" />
+
+    <div class="mode-switch">
+      <button type="button" id="mode-text-btn" class="mode-btn active">✏️ Texte</button>
+      <button type="button" id="mode-draw-btn" class="mode-btn">🖌️ Dessin</button>
+    </div>
+
+    <div class="toolbar" id="format-toolbar">
+      <button type="button" data-cmd="bold" title="Gras"><b>G</b></button>
+      <button type="button" data-cmd="italic" title="Italique"><i>I</i></button>
+      <button type="button" data-cmd="underline" title="Souligné"><u>S</u></button>
+      <button type="button" data-cmd="heading" title="Titre">H</button>
+      <button type="button" data-cmd="insertUnorderedList" title="Liste à puces">•—</button>
+      <button type="button" data-cmd="checklist" title="Liste à cocher">☑</button>
+      <span class="toolbar-sep"></span>
+      <div class="text-color-row" id="text-color-row"></div>
+      <select id="font-select" title="Police">
+        <option value="">Par défaut</option>
+        <option value="Georgia, serif">Serif</option>
+        <option value="'Courier New', monospace">Machine à écrire</option>
+        <option value="'Bradley Hand', 'Comic Sans MS', cursive">Manuscrite</option>
+      </select>
+    </div>
+
+    <div class="toolbar hidden" id="draw-toolbar">
+      <div class="color-row" id="color-row"></div>
+      <button type="button" data-width="3" class="width-btn active" title="Trait fin">●</button>
+      <button type="button" data-width="7" class="width-btn" title="Trait moyen">●</button>
+      <button type="button" data-width="14" class="width-btn" title="Trait épais">●</button>
+      <button type="button" id="eraser-btn" title="Gomme">🧽</button>
+      <span class="toolbar-sep"></span>
+      <button type="button" id="undo-stroke-btn" title="Annuler le dernier trait">↩️</button>
+      <button type="button" id="clear-draw-btn" title="Tout effacer">✕</button>
+    </div>
+
+    <div class="page-scroll">
+      <div id="note-page" class="note-page">
+        <canvas id="draw-canvas"></canvas>
+        <div id="text-editor" class="text-editor" contenteditable="true" data-placeholder="Écris ta note ici…"></div>
+      </div>
+      <button type="button" id="grow-page-btn" class="grow-page-btn">+ Agrandir la page</button>
+    </div>
+  </section>
+
+  <div id="toast" class="toast hidden" role="status">
+    <span id="toast-text"></span>
+    <button id="toast-undo" type="button">Annuler</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
