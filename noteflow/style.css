@@ -9,8 +9,8 @@
   --text: #1d1d1f;
   --muted: #6e6e73;
   --border: rgba(0, 0, 0, 0.08);
-  --accent: #ff9f0a;
-  --accent-text: #1d1d1f;
+  --accent: #1d1d1f;
+  --accent-text: #ffffff;
   --danger: #ff3b30;
   --radius: 16px;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.03);
@@ -28,7 +28,7 @@
     --text: #f5f5f7;
     --muted: #98989d;
     --border: rgba(255, 255, 255, 0.09);
-    --accent: #ff9f0a;
+    --accent: #f5f5f7;
     --accent-text: #1d1d1f;
     --danger: #ff453a;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -45,7 +45,8 @@
   --text: #1d1d1f;
   --muted: #6e6e73;
   --border: rgba(0, 0, 0, 0.08);
-  --accent: #ff9f0a;
+  --accent: #1d1d1f;
+  --accent-text: #ffffff;
   --danger: #ff3b30;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.03);
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 20px rgba(0, 0, 0, 0.07);
@@ -60,7 +61,8 @@
   --text: #f5f5f7;
   --muted: #98989d;
   --border: rgba(255, 255, 255, 0.09);
-  --accent: #ff9f0a;
+  --accent: #f5f5f7;
+  --accent-text: #1d1d1f;
   --danger: #ff453a;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45);
@@ -173,7 +175,15 @@ button {
   font-size: 20px;
 }
 
+.search-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .search-input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   padding: 10px 12px;
   border-radius: var(--radius);
@@ -181,9 +191,19 @@ button {
   background: var(--surface);
   color: var(--text);
   font-size: 14px;
-  margin-bottom: 10px;
   box-shadow: var(--shadow-sm);
   transition: box-shadow 0.2s var(--ease);
+}
+
+#sort-select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  padding: 0 10px;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
 }
 
 .search-input:focus {
@@ -449,6 +469,22 @@ button {
   outline: none;
 }
 
+.folder-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.word-count {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  padding-bottom: 10px;
+}
+
 .folder-input {
   border: none;
   background: transparent;
@@ -456,8 +492,9 @@ button {
   color: var(--muted);
   padding: 0 4px 10px;
   outline: none;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 12px;
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
 }
 
 .mode-switch {

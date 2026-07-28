@@ -36,7 +36,14 @@
       </div>
     </div>
 
-    <input id="search-input" type="search" class="search-input" placeholder="🔎 Rechercher…" autocomplete="off" />
+    <div class="search-row">
+      <input id="search-input" type="search" class="search-input" placeholder="🔎 Rechercher… (⌘F)" autocomplete="off" />
+      <select id="sort-select" title="Trier">
+        <option value="recent">Récentes</option>
+        <option value="title">Titre A-Z</option>
+        <option value="created">Date de création</option>
+      </select>
+    </div>
 
     <div id="folder-filters" class="tag-filters hidden"></div>
 
@@ -51,12 +58,16 @@
       <span id="save-indicator" class="save-indicator"></span>
       <div class="topbar-actions">
         <button id="pin-btn" class="icon-btn" type="button" title="Épingler">📌</button>
+        <button id="duplicate-note-btn" class="icon-btn" type="button" title="Dupliquer">⎘</button>
         <button id="delete-note-btn" class="icon-btn" type="button" title="Supprimer">🗑️</button>
       </div>
     </header>
 
     <input id="title-input" type="text" class="title-input" placeholder="Titre" maxlength="200" autocomplete="off" />
-    <input id="folder-input" type="text" class="folder-input" placeholder="Dossier (ex: Perso, Travail…)" maxlength="40" autocomplete="off" />
+    <div class="folder-row">
+      <input id="folder-input" type="text" class="folder-input" placeholder="Dossier (ex: Perso, Travail…)" maxlength="40" autocomplete="off" />
+      <span id="word-count" class="word-count"></span>
+    </div>
 
     <div class="mode-switch">
       <button type="button" id="mode-text-btn" class="mode-btn active">✏️ Texte</button>
@@ -81,6 +92,14 @@
           <option value="Georgia, serif">Serif</option>
           <option value="'Courier New', monospace">Machine à écrire</option>
           <option value="'Bradley Hand', 'Comic Sans MS', cursive">Manuscrite</option>
+        </select>
+      </div>
+      <div class="toolbar-group">
+        <select id="size-select" title="Taille du texte">
+          <option value="14">Petit</option>
+          <option value="15" selected>Moyen</option>
+          <option value="18">Grand</option>
+          <option value="22">Très grand</option>
         </select>
       </div>
     </div>

@@ -49,7 +49,7 @@ async function dbDelete(id) {
 }
 
 // --- Local prefs (theme) ---
-const PREF_KEYS = { theme: "noteflow.theme" };
+const PREF_KEYS = { theme: "noteflow.theme", sort: "noteflow.sort" };
 const loadPref = (key, fallback) => {
   try {
     const raw = localStorage.getItem(key);
@@ -122,6 +122,14 @@ const notesListEl = document.getElementById("notes-list");
 const notesEmptyEl = document.getElementById("notes-empty");
 const searchInput = document.getElementById("search-input");
 const folderFiltersEl = document.getElementById("folder-filters");
+const sortSelect = document.getElementById("sort-select");
+let sortMode = loadPref(PREF_KEYS.sort, "recent");
+sortSelect.value = sortMode;
+sortSelect.addEventListener("change", () => {
+  sortMode = sortSelect.value;
+  savePref(PREF_KEYS.sort, sortMode);
+  renderList();
+});
 
 function stripHtml(html) {
   const div = document.createElement("div");
@@ -144,7 +152,7 @@ function timeAgo(ts) {
 function folderColor(folder) {
   let hash = 0;
   for (let i = 0; i < folder.length; i++) hash = folder.charCodeAt(i) + ((hash << 5) - hash);
-  return `hsl(${Math.abs(hash) % 360}, 55%, 45%)`;
+  return `hsl(${Math.abs(hash) % 360}, 28%, 38%)`;
 }
 
 function allFolders() {
@@ -182,6 +190,8 @@ function renderList() {
 
   visible.sort((a, b) => {
     if (!!b.pinned - !!a.pinned !== 0) return !!b.pinned - !!a.pinned;
+    if (sortMode === "title") return (a.title || "").localeCompare(b.title || "", "fr");
+    if (sortMode === "created") return b.createdAt - a.createdAt;
     return b.updatedAt - a.updatedAt;
   });
 
@@ -248,6 +258,9 @@ const pinBtn = document.getElementById("pin-btn");
 const deleteNoteBtn = document.getElementById("delete-note-btn");
 const saveIndicator = document.getElementById("save-indicator");
 const newNoteBtn = document.getElementById("new-note-btn");
+const duplicateNoteBtn = document.getElementById("duplicate-note-btn");
+const wordCountEl = document.getElementById("word-count");
+const sizeSelect = document.getElementById("size-select");
 
 function newNoteObject() {
   const now = Date.now();
@@ -261,7 +274,15 @@ function newNoteObject() {
     updatedAt: now,
     drawing: null,
     pageHeight: 700,
+    fontSize: 15,
   };
+}
+
+function updateWordCount() {
+  const text = textEditor.textContent.trim();
+  const words = text ? text.split(/\s+/).length : 0;
+  const chars = text.length;
+  wordCountEl.textContent = words ? `${words} mot${words > 1 ? "s" : ""} · ${chars} car.` : "";
 }
 
 async function openNote(id) {
@@ -279,12 +300,38 @@ function loadNoteIntoEditor() {
   saveIndicator.textContent = "";
   notePage.style.minHeight = (currentNote.pageHeight || 700) + "px";
   textEditor.style.minHeight = (currentNote.pageHeight || 700) + "px";
+  textEditor.style.fontSize = (currentNote.fontSize || 15) + "px";
+  sizeSelect.value = String(currentNote.fontSize || 15);
+  updateWordCount();
   setMode("text");
   setTimeout(() => {
     initCanvasSize();
     redrawStrokes();
   }, 0);
 }
+
+sizeSelect.addEventListener("change", () => {
+  const size = Number(sizeSelect.value);
+  textEditor.style.fontSize = size + "px";
+  currentNote.fontSize = size;
+  scheduleSave();
+});
+
+duplicateNoteBtn.addEventListener("click", async () => {
+  flushSave(true);
+  const copy = JSON.parse(JSON.stringify(currentNote));
+  copy.id = crypto.randomUUID();
+  copy.title = (currentNote.title || "Sans titre") + " (copie)";
+  copy.pinned = false;
+  const now = Date.now();
+  copy.createdAt = now;
+  copy.updatedAt = now;
+  notes.unshift(copy);
+  await persistNote(copy);
+  currentNote = copy;
+  loadNoteIntoEditor();
+  showToast("Note dupliquée");
+});
 
 newNoteBtn.addEventListener("click", async () => {
   currentNote = newNoteObject();
@@ -332,7 +379,10 @@ async function flushSave(immediate) {
 
 titleInput.addEventListener("input", scheduleSave);
 folderInput.addEventListener("change", scheduleSave);
-textEditor.addEventListener("input", scheduleSave);
+textEditor.addEventListener("input", () => {
+  scheduleSave();
+  updateWordCount();
+});
 
 // --- Mode switch (unified page: text vs draw) ---
 const notePage = document.getElementById("note-page");
@@ -406,7 +456,7 @@ formatToolbar.addEventListener("click", (e) => {
 });
 
 const textColorRow = document.getElementById("text-color-row");
-const TEXT_COLORS = ["#14161a", "#ef4444", "#f59e0b", "#16a34a", "#2563eb", "#9333ea"];
+const TEXT_COLORS = ["#1d1d1f", "#a13d3d", "#a8752c", "#3d6b52", "#3a5a8c", "#6b4a8c"];
 TEXT_COLORS.forEach((color) => {
   const swatch = document.createElement("button");
   swatch.type = "button";
@@ -491,7 +541,7 @@ const undoStrokeBtn = document.getElementById("undo-stroke-btn");
 const clearDrawBtn = document.getElementById("clear-draw-btn");
 const eraserBtn = document.getElementById("eraser-btn");
 
-const COLORS = ["#111827", "#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#8b5cf6"];
+const COLORS = ["#1d1d1f", "#a13d3d", "#a8752c", "#3d6b52", "#3a5a8c", "#6b4a8c"];
 let drawColor = COLORS[0];
 let drawWidth = 3;
 let isErasing = false;
@@ -775,6 +825,22 @@ async function initSyncFromStorage() {
     await startSync(config, code);
   }
 }
+
+// --- Keyboard shortcuts ---
+document.addEventListener("keydown", (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+  const key = e.key.toLowerCase();
+  if (listScreen.classList.contains("active")) {
+    if (key === "n") {
+      e.preventDefault();
+      newNoteBtn.click();
+    } else if (key === "f") {
+      e.preventDefault();
+      searchInput.focus();
+    }
+  }
+});
 
 // --- Init ---
 (async () => {
