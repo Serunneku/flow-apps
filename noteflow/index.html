@@ -13,9 +13,17 @@
 <div class="app" id="app">
   <!-- List screen -->
   <section id="list-screen" class="screen active">
+    <div class="smoke-bg" aria-hidden="true">
+      <span class="smoke-blob smoke-1"></span>
+      <span class="smoke-blob smoke-2"></span>
+      <span class="smoke-blob smoke-3"></span>
+    </div>
     <header class="topbar">
       <h1>NoteFlow</h1>
       <div class="topbar-actions">
+        <button id="export-btn" class="icon-btn" type="button" title="Exporter toutes les notes (JSON)">⬇️</button>
+        <button id="import-btn" class="icon-btn" type="button" title="Importer des notes (JSON)">⬆️</button>
+        <input id="import-input" type="file" accept="application/json" class="hidden" />
         <button id="sync-toggle" class="icon-btn" type="button" title="Synchronisation">☁️</button>
         <button id="theme-toggle" class="icon-btn" type="button" title="Thème">🌓</button>
         <button id="new-note-btn" class="icon-btn primary" type="button" title="Nouvelle note">+</button>
@@ -42,6 +50,7 @@
         <option value="recent">Récentes</option>
         <option value="title">Titre A-Z</option>
         <option value="created">Date de création</option>
+        <option value="manual">Ordre manuel (glisser-déposer)</option>
       </select>
     </div>
 
@@ -57,11 +66,31 @@
       <button id="back-btn" class="icon-btn" type="button" aria-label="Retour">←</button>
       <span id="save-indicator" class="save-indicator"></span>
       <div class="topbar-actions">
+        <button id="focus-btn" class="icon-btn" type="button" title="Mode focus">🎯</button>
+        <button id="reminder-btn" class="icon-btn" type="button" title="Rappel">🔔</button>
+        <button id="history-btn" class="icon-btn" type="button" title="Historique des versions">🕘</button>
+        <button id="lock-btn" class="icon-btn" type="button" title="Verrouiller avec un code">🔓</button>
         <button id="pin-btn" class="icon-btn" type="button" title="Épingler">📌</button>
         <button id="duplicate-note-btn" class="icon-btn" type="button" title="Dupliquer">⎘</button>
         <button id="delete-note-btn" class="icon-btn" type="button" title="Supprimer">🗑️</button>
       </div>
     </header>
+
+    <div id="reminder-panel" class="side-panel hidden">
+      <label class="sync-label">Me rappeler cette note
+        <input id="reminder-input" type="datetime-local" class="sync-code-input" />
+      </label>
+      <p class="panel-hint">⚠️ Le rappel ne se déclenche que si NoteFlow est ouvert dans un onglet (pas de notification en arrière-plan).</p>
+      <div class="sync-actions">
+        <button id="reminder-save-btn" type="button">Définir le rappel</button>
+        <button id="reminder-clear-btn" type="button" class="link-btn">Supprimer</button>
+      </div>
+    </div>
+
+    <div id="history-panel" class="side-panel hidden">
+      <p class="sync-status">Versions précédentes de cette note</p>
+      <ul id="history-list" class="history-list"></ul>
+    </div>
 
     <input id="title-input" type="text" class="title-input" placeholder="Titre" maxlength="200" autocomplete="off" />
     <div class="folder-row">
@@ -71,7 +100,7 @@
 
     <div class="mode-switch">
       <button type="button" id="mode-text-btn" class="mode-btn active">✏️ Texte</button>
-      <button type="button" id="mode-draw-btn" class="mode-btn">🖌️ Dessin</button>
+      <button type="button" id="mode-draw-btn" class="mode-btn">🖌️ Dessin &amp; surlignage</button>
     </div>
 
     <div class="toolbar" id="format-toolbar">
@@ -89,8 +118,17 @@
       </div>
       <div class="toolbar-group">
         <button type="button" data-cmd="insertUnorderedList" title="Liste à puces">☰</button>
-        <button type="button" data-cmd="checklist" title="Liste à cocher">☑</button>
+        <button type="button" data-cmd="insertOrderedList" title="Liste numérotée">①</button>
+        <button type="button" data-cmd="checklist" title="Liste à cocher (to-do)">☑</button>
         <button type="button" data-cmd="removeFormat" title="Effacer la mise en forme">⊘</button>
+      </div>
+      <div class="toolbar-group">
+        <button type="button" data-cmd="table" title="Insérer un tableau">▦</button>
+        <button type="button" data-cmd="table-add-row" title="Ajouter une ligne">＋⎯</button>
+        <button type="button" data-cmd="table-add-col" title="Ajouter une colonne">＋❘</button>
+        <button type="button" data-cmd="table-delete-row" title="Supprimer la ligne">−⎯</button>
+        <button type="button" data-cmd="table-delete-col" title="Supprimer la colonne">−❘</button>
+        <button type="button" data-cmd="table-delete" title="Supprimer le tableau">▦⊘</button>
       </div>
       <div class="toolbar-group text-color-row" id="text-color-row"></div>
       <div class="toolbar-group">
@@ -109,18 +147,23 @@
     </div>
 
     <div class="toolbar hidden" id="draw-toolbar">
+      <div class="toolbar-group">
+        <button type="button" id="pen-btn" class="tool-btn active" title="Stylo">🖊️</button>
+        <button type="button" id="highlighter-btn" class="tool-btn" title="Surligneur">🖍️</button>
+        <button type="button" id="eraser-btn" class="tool-btn" title="Gomme">🧽</button>
+      </div>
       <div class="toolbar-group color-row" id="color-row"></div>
       <div class="toolbar-group">
         <button type="button" data-width="3" class="width-btn active" title="Trait fin">●</button>
         <button type="button" data-width="7" class="width-btn" title="Trait moyen">●</button>
         <button type="button" data-width="14" class="width-btn" title="Trait épais">●</button>
-        <button type="button" id="eraser-btn" title="Gomme">🧽</button>
       </div>
       <div class="toolbar-group">
         <button type="button" id="undo-stroke-btn" title="Annuler le dernier trait">↩️</button>
         <button type="button" id="clear-draw-btn" title="Tout effacer">✕</button>
       </div>
     </div>
+    <p class="draw-hint hidden" id="draw-hint">Dessine ou surligne directement sur ta page : le texte reste visible en dessous.</p>
 
     <div class="page-scroll">
       <div id="note-page" class="note-page">
@@ -134,6 +177,18 @@
   <div id="toast" class="toast hidden" role="status">
     <span id="toast-text"></span>
     <button id="toast-undo" type="button">Annuler</button>
+  </div>
+
+  <div id="lock-overlay" class="lock-overlay hidden">
+    <div class="lock-box">
+      <p class="lock-title">🔒 Note verrouillée</p>
+      <input id="lock-input" type="password" inputmode="numeric" class="lock-input" placeholder="Code" autocomplete="off" />
+      <p id="lock-error" class="lock-error hidden">Code incorrect</p>
+      <div class="sync-actions">
+        <button id="lock-unlock-btn" type="button">Déverrouiller</button>
+        <button id="lock-cancel-btn" type="button" class="link-btn">Retour à la liste</button>
+      </div>
+    </div>
   </div>
 </div>
 
