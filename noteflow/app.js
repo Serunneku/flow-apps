@@ -68,13 +68,13 @@ let activeFolderFilter = null;
 // --- Theme ---
 const themeToggle = document.getElementById("theme-toggle");
 const THEME_ORDER = ["auto", "light", "dark"];
-const THEME_LABEL = { auto: "🌓", light: "☀️", dark: "🌙" };
+const THEME_ICON = { auto: "contrast", light: "sun", dark: "moon" };
 let theme = loadPref(PREF_KEYS.theme, "auto");
 
 function applyTheme(t) {
   if (t === "auto") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", t);
-  themeToggle.textContent = THEME_LABEL[t];
+  themeToggle.innerHTML = `<svg class="icon"><use href="#icon-${THEME_ICON[t]}"/></svg>`;
 }
 applyTheme(theme);
 themeToggle.addEventListener("click", () => {
@@ -292,27 +292,31 @@ function renderList() {
     const li = document.createElement("li");
     li.className = "note-item";
     const preview = note.locked
-      ? "🔒 Note verrouillée"
-      : stripHtml(note.html) || (note.drawing && note.drawing.strokes.length ? "🖊️ Dessin" : "Note vide");
+      ? "Note verrouillée"
+      : stripHtml(note.html) || (note.drawing && note.drawing.strokes.length ? "Dessin" : "Note vide");
+    const badges =
+      (note.pinned ? '<svg class="icon note-badge"><use href="#icon-pin"/></svg>' : "") +
+      (note.locked ? '<svg class="icon note-badge"><use href="#icon-lock-closed"/></svg>' : "");
     li.innerHTML = `
       <span class="drag-handle" aria-hidden="true">⠿</span>
       <div class="note-main">
-        <div class="note-title"></div>
+        <div class="note-title">${badges}<span class="note-title-text"></span></div>
         <div class="note-preview"></div>
         <div class="note-meta">
           <span class="note-date"></span>
         </div>
       </div>
-      <button class="note-delete" aria-label="Supprimer">✕</button>
+      <button class="note-delete" aria-label="Supprimer"><svg class="icon"><use href="#icon-close"/></svg></button>
     `;
-    const titleText = (note.pinned ? "📌 " : "") + (note.locked ? "🔒 " : "") + (note.title || "Sans titre");
-    li.querySelector(".note-title").innerHTML = highlightMatch(titleText, query);
+    li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", query);
     li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, query);
     li.querySelector(".note-date").textContent = timeAgo(note.updatedAt);
     if (note.reminderAt && note.reminderAt > Date.now()) {
       const rem = document.createElement("span");
       rem.className = "note-reminder-chip";
-      rem.textContent = "🔔 " + new Date(note.reminderAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      rem.innerHTML =
+        '<svg class="icon"><use href="#icon-bell"/></svg> ' +
+        new Date(note.reminderAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
       li.querySelector(".note-meta").appendChild(rem);
     }
     if (note.folder) {
@@ -428,7 +432,7 @@ function loadNoteIntoEditor() {
   folderInput.value = currentNote.folder || "";
   textEditor.innerHTML = currentNote.html || "";
   pinBtn.classList.toggle("active", !!currentNote.pinned);
-  lockBtn.textContent = currentNote.locked ? "🔒" : "🔓";
+  setLockIcon(!!currentNote.locked);
   lockBtn.classList.toggle("active", !!currentNote.locked);
   saveIndicator.textContent = "";
   notePage.style.minHeight = (currentNote.pageHeight || 700) + "px";
@@ -569,6 +573,10 @@ const lockUnlockBtn = document.getElementById("lock-unlock-btn");
 const lockCancelBtn = document.getElementById("lock-cancel-btn");
 let pendingUnlockNoteId = null;
 
+function setLockIcon(locked) {
+  lockBtn.innerHTML = `<svg class="icon"><use href="#icon-lock-${locked ? "closed" : "open"}"/></svg>`;
+}
+
 async function hashPin(pin) {
   const data = new TextEncoder().encode(pin);
   const digest = await crypto.subtle.digest("SHA-256", data);
@@ -615,7 +623,7 @@ lockBtn.addEventListener("click", async () => {
     if (!pin) return;
     currentNote.pinCode = await hashPin(pin);
     currentNote.locked = true;
-    lockBtn.textContent = "🔒";
+    setLockIcon(true);
     lockBtn.classList.add("active");
     scheduleSave();
     showToast("Note verrouillée");
@@ -626,7 +634,7 @@ lockBtn.addEventListener("click", async () => {
     if (hash === currentNote.pinCode) {
       currentNote.locked = false;
       currentNote.pinCode = null;
-      lockBtn.textContent = "🔓";
+      setLockIcon(false);
       lockBtn.classList.remove("active");
       scheduleSave();
       showToast("Verrou retiré");
@@ -683,7 +691,7 @@ setInterval(() => {
       if ("Notification" in window && Notification.permission === "granted") {
         new Notification(note.title || "Rappel NoteFlow", { body: "Touche pour ouvrir ta note." });
       } else {
-        showToast(`🔔 Rappel : ${note.title || "Sans titre"}`);
+        showToast(`Rappel : ${note.title || "Sans titre"}`);
       }
       if (listScreen.classList.contains("active")) renderList();
     }
