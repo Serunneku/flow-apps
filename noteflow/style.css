@@ -181,7 +181,7 @@ body {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(to bottom, transparent 0%, transparent 40%, var(--bg) 100%);
+  background: linear-gradient(to bottom, transparent 0%, transparent 40%, var(--screen-bg, var(--bg)) 100%);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -222,10 +222,25 @@ button {
   outline: none;
 }
 
+.icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
 .icon-btn {
   width: 36px;
   height: 36px;
   min-width: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface);
@@ -233,7 +248,7 @@ button {
   font-size: 15px;
   cursor: pointer;
   color: var(--text);
-  transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease), background-color 0.2s var(--ease), border-color 0.2s var(--ease);
+  transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease), background-color 0.2s var(--ease), border-color 0.2s var(--ease), color 0.2s var(--ease);
 }
 
 .icon-btn:hover {
@@ -255,13 +270,25 @@ button {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+  position: relative;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  pointer-events: none;
 }
 
 .search-input {
   flex: 1;
   min-width: 0;
   width: 100%;
-  padding: 10px 12px;
+  padding: 10px 12px 10px 34px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface);
@@ -565,12 +592,27 @@ button {
 }
 
 .note-item .note-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.005em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.note-item .note-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.note-item .note-badge {
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+  flex-shrink: 0;
 }
 
 .note-item .note-preview {
@@ -603,9 +645,17 @@ button {
 }
 
 .note-item .note-reminder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-size: 11px;
   font-weight: 500;
   color: var(--muted);
+}
+
+.note-item .note-reminder-chip .icon {
+  width: 11px;
+  height: 11px;
 }
 
 .note-item .note-pin {
@@ -613,14 +663,21 @@ button {
 }
 
 .note-item .note-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 16px;
   cursor: pointer;
   padding: 6px;
   border-radius: 999px;
   transition: color 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+
+.note-item .note-delete .icon {
+  width: 14px;
+  height: 14px;
 }
 
 .note-item .note-delete:hover {
@@ -706,6 +763,10 @@ button {
 
 .mode-btn {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: none;
   background: transparent;
   color: var(--muted);
@@ -715,6 +776,11 @@ button {
   border-radius: 999px;
   cursor: pointer;
   transition: background-color 0.2s var(--ease), color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.mode-btn .icon {
+  width: 15px;
+  height: 15px;
 }
 
 .mode-btn.active {
@@ -752,6 +818,9 @@ button {
 .toolbar button {
   min-width: 32px;
   height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   border-radius: 8px;
@@ -761,6 +830,11 @@ button {
   -webkit-tap-highlight-color: transparent;
   transition: background-color 0.15s var(--ease), color 0.15s var(--ease), transform 0.1s var(--ease);
   flex-shrink: 0;
+}
+
+.toolbar button .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .toolbar button:hover {
@@ -1199,9 +1273,18 @@ input:focus-visible,
 }
 
 .lock-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   margin: 0;
   font-size: 16px;
   font-weight: 600;
+}
+
+.lock-title .icon {
+  width: 18px;
+  height: 18px;
 }
 
 .lock-input {
@@ -1233,4 +1316,76 @@ input:focus-visible,
 
 .lock-box .sync-actions button:first-child {
   width: 100%;
+}
+
+/* --- Desktop layout ---
+   Below ~860px the app is a full-bleed mobile screen (unchanged). Above it,
+   it becomes a centered "app window" card on a soft backdrop instead of a
+   phone screen stretched edge-to-edge across a black page. */
+@media (min-width: 860px) {
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 6vh 24px;
+    background:
+      radial-gradient(1100px 620px at 50% -8%, color-mix(in srgb, var(--surface) 55%, var(--bg)) 0%, transparent 60%),
+      var(--bg);
+  }
+
+  .app {
+    max-width: 1100px;
+    width: 100%;
+    height: min(84vh, 880px);
+    min-height: 0;
+    margin: 0;
+    padding: 22px 36px 28px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 28px;
+    box-shadow: var(--shadow-page);
+    overflow: hidden;
+    --screen-bg: var(--surface);
+  }
+
+  #list-screen,
+  #editor-screen {
+    min-height: 0;
+  }
+
+  .notes-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    align-content: start;
+    gap: 12px;
+  }
+
+  .note-item {
+    align-items: flex-start;
+  }
+
+  .notes-list.manual-mode .note-item {
+    align-items: center;
+  }
+
+  #editor-screen .page-scroll {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  #editor-screen .note-page {
+    width: 100%;
+    max-width: 760px;
+  }
+
+  #editor-screen .grow-page-btn {
+    max-width: 760px;
+    width: 100%;
+  }
+
+  .toolbar {
+    row-gap: 8px;
+  }
 }
