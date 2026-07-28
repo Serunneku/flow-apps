@@ -266,6 +266,82 @@ button {
   font-size: 20px;
 }
 
+/* --- Overflow "more" menus --- */
+.menu-wrap {
+  position: relative;
+}
+
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  background: var(--surface-glass);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-hover);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  z-index: 30;
+  animation: menuIn 0.15s var(--ease);
+}
+
+@keyframes menuIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s var(--ease);
+}
+
+.menu-item:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.menu-item.danger {
+  color: var(--danger);
+}
+
+.menu-item.danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 4px;
+}
+
+/* --- Trash / Archive banner --- */
+.view-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
 .search-row {
   display: flex;
   gap: 8px;
@@ -394,6 +470,59 @@ button {
   color: var(--muted);
   text-align: center;
   padding: 12px 0;
+}
+
+.paper-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.paper-style-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.paper-style-btn:hover {
+  color: var(--text);
+}
+
+.paper-style-btn.selected {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.paper-style-preview {
+  width: 44px;
+  height: 34px;
+  border-radius: 6px;
+  background-color: var(--paper);
+  border: 1px solid var(--border);
+}
+
+.paper-style-preview[data-paper="lined"] {
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 7px, var(--border) 7px, var(--border) 8px);
+}
+
+.paper-style-preview[data-paper="grid"] {
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 7px, var(--border) 7px, var(--border) 8px),
+    repeating-linear-gradient(to right, transparent 0, transparent 7px, var(--border) 7px, var(--border) 8px);
+}
+
+.paper-style-preview[data-paper="dots"] {
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 7px 7px;
 }
 
 .sync-panel {
@@ -662,7 +791,14 @@ button {
   font-size: 13px;
 }
 
-.note-item .note-delete {
+.note-item .note-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.note-item .note-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -675,12 +811,17 @@ button {
   transition: color 0.15s var(--ease), background-color 0.15s var(--ease);
 }
 
-.note-item .note-delete .icon {
+.note-item .note-action .icon {
   width: 14px;
   height: 14px;
 }
 
-.note-item .note-delete:hover {
+.note-item .note-action:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.note-item .note-action.danger:hover {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
@@ -974,12 +1115,33 @@ select option {
 
 .note-page {
   position: relative;
-  background: var(--paper);
+  background-color: var(--paper);
   border-radius: var(--radius);
   min-height: 700px;
   overflow: hidden;
   box-shadow: var(--shadow-page);
-  transition: box-shadow 0.3s var(--ease);
+  transition: box-shadow 0.3s var(--ease), background-color 0.25s var(--ease);
+}
+
+.note-page[data-paper="lined"] {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 27px,
+    var(--border) 27px,
+    var(--border) 28px
+  );
+  background-position: 0 64px;
+}
+
+.note-page[data-paper="grid"] {
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 23px, var(--border) 23px, var(--border) 24px),
+    repeating-linear-gradient(to right, transparent 0, transparent 23px, var(--border) 23px, var(--border) 24px);
+}
+
+.note-page[data-paper="dots"] {
+  background-image: radial-gradient(var(--border) 1.1px, transparent 1.1px);
+  background-size: 22px 22px;
 }
 
 #draw-canvas {
@@ -1133,6 +1295,67 @@ select option {
 .text-editor table.note-table td:focus {
   outline: none;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.text-editor a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.text-editor img {
+  max-width: 100%;
+  border-radius: 10px;
+  display: block;
+  margin: 10px 0;
+  box-shadow: var(--shadow-sm);
+}
+
+.text-editor mark {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: inherit;
+  border-radius: 3px;
+}
+
+/* --- Print / export to PDF --- */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #editor-screen,
+  #editor-screen .page-scroll,
+  #editor-screen .note-page,
+  #editor-screen .note-page * {
+    visibility: visible;
+  }
+  #editor-screen .title-input {
+    visibility: visible;
+    position: static;
+    font-size: 24px;
+    font-weight: 700;
+    border: none;
+  }
+  .topbar,
+  .folder-row,
+  .mode-switch,
+  .toolbar,
+  .draw-hint,
+  .side-panel,
+  .grow-page-btn,
+  #draw-canvas {
+    display: none !important;
+  }
+  #app,
+  #editor-screen,
+  .page-scroll,
+  .note-page {
+    position: static !important;
+    height: auto !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
+  }
 }
 
 .grow-page-btn {
