@@ -250,11 +250,16 @@ const toastText = document.getElementById("toast-text");
 const toastUndo = document.getElementById("toast-undo");
 let toastTimer = null;
 
-function showToast(message, onUndo) {
+let toastIsUndoable = false;
+
+function showToast(message, onUndo, options) {
+  const { actionLabel, ctrlZ = true } = options || {};
   clearTimeout(toastTimer);
   toastText.textContent = message;
+  toastUndo.textContent = actionLabel || "Annuler";
   toastUndo.classList.toggle("hidden", !onUndo);
   toastEl.classList.remove("hidden");
+  toastIsUndoable = !!onUndo && ctrlZ;
   toastUndo.onclick = () => {
     if (onUndo) onUndo();
     toastEl.classList.add("hidden");
@@ -264,7 +269,7 @@ function showToast(message, onUndo) {
 }
 
 function triggerToastUndo() {
-  if (toastEl.classList.contains("hidden") || toastUndo.classList.contains("hidden")) return false;
+  if (toastEl.classList.contains("hidden") || toastUndo.classList.contains("hidden") || !toastIsUndoable) return false;
   toastUndo.onclick();
   return true;
 }
@@ -358,6 +363,18 @@ function stripHtml(html) {
   const div = document.createElement("div");
   div.innerHTML = html || "";
   return (div.textContent || "").trim();
+}
+
+// Parsing HTML for a text preview is the costliest part of rendering the list
+// (worse with inline base64 images); cache it per note and only recompute
+// when the note's html actually changed since the last render.
+const previewCache = new Map();
+function getPreview(note) {
+  const cached = previewCache.get(note.id);
+  if (cached && cached.html === note.html) return cached.text;
+  const text = stripHtml(note.html);
+  previewCache.set(note.id, { html: note.html, text });
+  return text;
 }
 
 function timeAgo(ts) {
@@ -548,7 +565,7 @@ function renderList() {
     if (listView === "active" && (n.archived || n.deletedAt)) return false;
     if (activeFolderFilter && n.folder !== activeFolderFilter) return false;
     if (query) {
-      const haystack = (n.title + " " + (n.folder || "") + " " + (n.locked ? "" : stripHtml(n.html))).toLowerCase();
+      const haystack = (n.title + " " + (n.folder || "") + " " + (n.locked ? "" : getPreview(n))).toLowerCase();
       if (!haystack.includes(query)) return false;
     }
     return true;
@@ -571,7 +588,7 @@ function renderList() {
     li.className = "note-item";
     const preview = note.locked
       ? "Note verrouillée"
-      : stripHtml(note.html) || (note.drawing && note.drawing.strokes.length ? "Dessin" : "Note vide");
+      : getPreview(note) || (note.drawing && note.drawing.strokes.length ? "Dessin" : "Note vide");
     const badges =
       (note.pinned ? '<svg class="icon note-badge"><use href="#icon-pin"/></svg>' : "") +
       (note.locked ? '<svg class="icon note-badge"><use href="#icon-lock-closed"/></svg>' : "");
@@ -665,9 +682,13 @@ function renderList() {
   });
 }
 
+let searchDebounceTimer = null;
 searchInput.addEventListener("input", () => {
-  searchQuery = searchInput.value;
-  renderList();
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    searchQuery = searchInput.value;
+    renderList();
+  }, 150);
 });
 
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -968,9 +989,20 @@ function scheduleSave() {
   saveTimer = setTimeout(() => flushSave(false), 500);
 }
 
+// Version history keeps up to 20 full-text snapshots per note. Base64 images
+// inline in the html would get duplicated in every single one of them, so
+// history snapshots keep the text/formatting but drop embedded images
+// (restoring an old version restores the text; the current images stay put).
+function stripImagesForHistory(html) {
+  const div = document.createElement("div");
+  div.innerHTML = html || "";
+  div.querySelectorAll("img").forEach((img) => img.remove());
+  return div.innerHTML;
+}
+
 function pushHistorySnapshot() {
   if (!currentNote.history) currentNote.history = [];
-  currentNote.history.push({ title: currentNote.title, html: currentNote.html, ts: Date.now() });
+  currentNote.history.push({ title: currentNote.title, html: stripImagesForHistory(currentNote.html), ts: Date.now() });
   if (currentNote.history.length > 20) currentNote.history.shift();
 }
 
@@ -1602,28 +1634,59 @@ function insertLink() {
 // --- Images (toolbar insert + paste) ---
 const imageInput = document.getElementById("image-input");
 
-function insertImageFile(file) {
+// Downscale + re-encode as JPEG before storing: a raw phone photo can be
+// several MB of base64 inside note.html, and every one of those bytes gets
+// duplicated into every history snapshot (see pushHistorySnapshot) and
+// reloaded whole into memory on every app boot (dbGetAll loads all notes).
+const IMAGE_MAX_DIMENSION = 1400;
+const IMAGE_QUALITY = 0.82;
+
+function compressImageFile(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const original = new Image();
+      original.onload = () => {
+        const scale = Math.min(1, IMAGE_MAX_DIMENSION / Math.max(original.width, original.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(original.width * scale);
+        canvas.height = Math.round(original.height * scale);
+        const ctx2d = canvas.getContext("2d");
+        ctx2d.drawImage(original, 0, 0, canvas.width, canvas.height);
+        try {
+          resolve(canvas.toDataURL("image/jpeg", IMAGE_QUALITY));
+        } catch {
+          resolve(reader.result);
+        }
+      };
+      original.onerror = () => resolve(reader.result);
+      original.src = reader.result;
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function insertImageFile(file) {
   if (!file || !file.type.startsWith("image/")) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    restoreSelection();
-    const img = document.createElement("img");
-    img.src = reader.result;
-    const sel = window.getSelection();
-    if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
-      const range = sel.getRangeAt(0);
-      range.collapse(false);
-      range.insertNode(img);
-      range.setStartAfter(img);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } else {
-      textEditor.appendChild(img);
-    }
-    scheduleSave();
-  };
-  reader.readAsDataURL(file);
+  const dataUrl = await compressImageFile(file);
+  if (!dataUrl) return;
+  restoreSelection();
+  const img = document.createElement("img");
+  img.src = dataUrl;
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
+    const range = sel.getRangeAt(0);
+    range.collapse(false);
+    range.insertNode(img);
+    range.setStartAfter(img);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    textEditor.appendChild(img);
+  }
+  scheduleSave();
 }
 
 imageInput.addEventListener("change", () => {
@@ -2445,8 +2508,14 @@ cmdkInput.addEventListener("keydown", (e) => {
 
 // --- Init ---
 (async () => {
-  notes = await dbGetAll();
-  await purgeOldTrash();
+  try {
+    notes = await dbGetAll();
+    await purgeOldTrash();
+  } catch (err) {
+    console.error("Échec du chargement des notes locales", err);
+    notes = [];
+    showToast("Impossible de charger tes notes locales (stockage indisponible ou navigation privée)");
+  }
   showList();
   initSyncFromStorage();
 })();
@@ -2455,5 +2524,10 @@ cmdkInput.addEventListener("keydown", (e) => {
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("service-worker.js").catch(() => {});
+  });
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "noteflow-update-available") {
+      showToast("Nouvelle version disponible", () => window.location.reload(), { actionLabel: "Actualiser", ctrlZ: false });
+    }
   });
 }
