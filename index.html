@@ -84,9 +84,9 @@
     opacity: 0.55;
     animation: drift 24s ease-in-out infinite;
   }
-  .g1 { width: 480px; height: 480px; left: 6%; top: 6%; background: radial-gradient(circle, rgba(120,130,180,0.55), transparent 70%); animation-duration: 28s; }
-  .g2 { width: 420px; height: 420px; right: 4%; top: 0; background: radial-gradient(circle, rgba(200,120,255,0.35), transparent 70%); animation-duration: 34s; animation-delay: -8s; }
-  .g3 { width: 380px; height: 380px; left: 38%; top: 22%; background: radial-gradient(circle, rgba(255,255,255,0.10), transparent 72%); animation-duration: 40s; animation-delay: -16s; }
+  .g1 { width: 480px; height: 480px; left: 6%; top: 6%; background: radial-gradient(circle, rgba(124,108,246,0.55), transparent 70%); animation-duration: 28s; }
+  .g2 { width: 420px; height: 420px; right: 4%; top: 0; background: radial-gradient(circle, rgba(66,133,244,0.40), transparent 70%); animation-duration: 34s; animation-delay: -8s; }
+  .g3 { width: 380px; height: 380px; left: 38%; top: 22%; background: radial-gradient(circle, rgba(246,140,198,0.28), transparent 72%); animation-duration: 40s; animation-delay: -16s; }
   @keyframes drift {
     0% { transform: translate(0,0) scale(1); }
     33% { transform: translate(24px,16px) scale(1.06); }
@@ -264,7 +264,23 @@
   .trust-chip svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
   /* --- Features --- */
-  .features { background: var(--surface); padding: 100px 24px; }
+  .features {
+    position: relative;
+    background: var(--surface);
+    padding: 100px 24px;
+    overflow: hidden;
+  }
+  .features::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background:
+      radial-gradient(700px 480px at 8% 0%, rgba(124,108,246,0.10), transparent 60%),
+      radial-gradient(650px 460px at 95% 15%, rgba(66,133,244,0.09), transparent 60%),
+      radial-gradient(600px 420px at 50% 100%, rgba(246,140,198,0.08), transparent 60%);
+  }
+  .features > * { position: relative; z-index: 1; }
   .section-head { text-align: center; max-width: 640px; margin: 0 auto 64px; }
   .section-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
   .section-title { font-size: clamp(30px, 4vw, 44px); font-weight: 800; letter-spacing: -0.03em; margin: 0 0 14px; }
