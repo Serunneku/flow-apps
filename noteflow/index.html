@@ -64,31 +64,39 @@
     </div>
 
     <div class="toolbar" id="format-toolbar">
-      <button type="button" data-cmd="bold" title="Gras"><b>G</b></button>
-      <button type="button" data-cmd="italic" title="Italique"><i>I</i></button>
-      <button type="button" data-cmd="underline" title="Souligné"><u>S</u></button>
-      <button type="button" data-cmd="heading" title="Titre">H</button>
-      <button type="button" data-cmd="insertUnorderedList" title="Liste à puces">•—</button>
-      <button type="button" data-cmd="checklist" title="Liste à cocher">☑</button>
-      <span class="toolbar-sep"></span>
-      <div class="text-color-row" id="text-color-row"></div>
-      <select id="font-select" title="Police">
-        <option value="">Par défaut</option>
-        <option value="Georgia, serif">Serif</option>
-        <option value="'Courier New', monospace">Machine à écrire</option>
-        <option value="'Bradley Hand', 'Comic Sans MS', cursive">Manuscrite</option>
-      </select>
+      <div class="toolbar-group">
+        <button type="button" data-cmd="bold" title="Gras"><b>B</b></button>
+        <button type="button" data-cmd="italic" title="Italique"><i>I</i></button>
+        <button type="button" data-cmd="underline" title="Souligné"><u>U</u></button>
+        <button type="button" data-cmd="heading" title="Titre">H</button>
+      </div>
+      <div class="toolbar-group">
+        <button type="button" data-cmd="insertUnorderedList" title="Liste à puces">☰</button>
+        <button type="button" data-cmd="checklist" title="Liste à cocher">☑</button>
+      </div>
+      <div class="toolbar-group text-color-row" id="text-color-row"></div>
+      <div class="toolbar-group">
+        <select id="font-select" title="Police">
+          <option value="">Par défaut</option>
+          <option value="Georgia, serif">Serif</option>
+          <option value="'Courier New', monospace">Machine à écrire</option>
+          <option value="'Bradley Hand', 'Comic Sans MS', cursive">Manuscrite</option>
+        </select>
+      </div>
     </div>
 
     <div class="toolbar hidden" id="draw-toolbar">
-      <div class="color-row" id="color-row"></div>
-      <button type="button" data-width="3" class="width-btn active" title="Trait fin">●</button>
-      <button type="button" data-width="7" class="width-btn" title="Trait moyen">●</button>
-      <button type="button" data-width="14" class="width-btn" title="Trait épais">●</button>
-      <button type="button" id="eraser-btn" title="Gomme">🧽</button>
-      <span class="toolbar-sep"></span>
-      <button type="button" id="undo-stroke-btn" title="Annuler le dernier trait">↩️</button>
-      <button type="button" id="clear-draw-btn" title="Tout effacer">✕</button>
+      <div class="toolbar-group color-row" id="color-row"></div>
+      <div class="toolbar-group">
+        <button type="button" data-width="3" class="width-btn active" title="Trait fin">●</button>
+        <button type="button" data-width="7" class="width-btn" title="Trait moyen">●</button>
+        <button type="button" data-width="14" class="width-btn" title="Trait épais">●</button>
+        <button type="button" id="eraser-btn" title="Gomme">🧽</button>
+      </div>
+      <div class="toolbar-group">
+        <button type="button" id="undo-stroke-btn" title="Annuler le dernier trait">↩️</button>
+        <button type="button" id="clear-draw-btn" title="Tout effacer">✕</button>
+      </div>
     </div>
 
     <div class="page-scroll">
