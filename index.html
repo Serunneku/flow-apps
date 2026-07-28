@@ -2,11 +2,436 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8" />
-<title>NoteFlow</title>
-<meta http-equiv="refresh" content="0; url=noteflow/" />
-<link rel="canonical" href="noteflow/" />
+<title>NoteFlow — Toutes tes idées. Un seul endroit.</title>
+<meta name="description" content="Texte, dessin, tableaux et listes sur la même page. 100% local, gratuit, sans compte." />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="canonical" href="./" />
+<link rel="apple-touch-icon" href="noteflow/icons/icon-180.png" />
+<meta name="theme-color" content="#000000" />
+<style>
+  :root {
+    --bg: #ffffff;
+    --ink: #0b0b0c;
+    --muted: #6e6e73;
+    --accent: #0b0b0c;
+    --line: rgba(0,0,0,0.08);
+    --surface: #f5f5f7;
+    --radius: 22px;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* --- Nav --- */
+  nav.topnav {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    background: rgba(255,255,255,0.72);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+  .nav-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--ink);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 9px 16px;
+    border-radius: 999px;
+    text-decoration: none;
+    transition: transform 0.2s var(--ease), opacity 0.2s var(--ease);
+  }
+  .nav-cta:hover { opacity: 0.82; transform: translateY(-1px); }
+
+  /* --- Hero --- */
+  .hero {
+    position: relative;
+    background: #000;
+    color: #fff;
+    overflow: hidden;
+    padding: 96px 24px 0;
+    isolation: isolate;
+  }
+  .hero-glow {
+    position: absolute;
+    inset: -20% -10% auto -10%;
+    height: 780px;
+    z-index: -1;
+    pointer-events: none;
+  }
+  .hero-glow span {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(70px);
+    opacity: 0.55;
+    animation: drift 24s ease-in-out infinite;
+  }
+  .g1 { width: 480px; height: 480px; left: 6%; top: 6%; background: radial-gradient(circle, rgba(120,130,180,0.55), transparent 70%); animation-duration: 28s; }
+  .g2 { width: 420px; height: 420px; right: 4%; top: 0; background: radial-gradient(circle, rgba(200,120,255,0.35), transparent 70%); animation-duration: 34s; animation-delay: -8s; }
+  .g3 { width: 380px; height: 380px; left: 38%; top: 22%; background: radial-gradient(circle, rgba(255,255,255,0.10), transparent 72%); animation-duration: 40s; animation-delay: -16s; }
+  @keyframes drift {
+    0% { transform: translate(0,0) scale(1); }
+    33% { transform: translate(24px,16px) scale(1.06); }
+    66% { transform: translate(-20px,20px) scale(0.96); }
+    100% { transform: translate(0,0) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) { .hero-glow span { animation: none; } }
+
+  .hero-inner {
+    max-width: 900px;
+    margin: 0 auto;
+    text-align: center;
+    position: relative;
+  }
+  .eyebrow {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.55);
+    margin-bottom: 20px;
+    opacity: 0;
+    animation: rise 0.7s var(--ease) forwards;
+  }
+  h1.hero-title {
+    font-size: clamp(40px, 7vw, 76px);
+    line-height: 1.04;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    margin: 0 0 22px;
+    opacity: 0;
+    animation: rise 0.8s var(--ease) 0.08s forwards;
+  }
+  h1.hero-title em {
+    font-style: normal;
+    background: linear-gradient(90deg, #fff, #b9c2ff 60%, #ffffff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .hero-sub {
+    font-size: clamp(17px, 2.4vw, 21px);
+    line-height: 1.55;
+    color: rgba(255,255,255,0.72);
+    max-width: 620px;
+    margin: 0 auto 36px;
+    font-weight: 400;
+    opacity: 0;
+    animation: rise 0.8s var(--ease) 0.16s forwards;
+  }
+  .hero-ctas {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+    opacity: 0;
+    animation: rise 0.8s var(--ease) 0.24s forwards;
+  }
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #fff;
+    color: #000;
+    font-size: 16px;
+    font-weight: 700;
+    padding: 15px 28px;
+    border-radius: 999px;
+    text-decoration: none;
+    box-shadow: 0 8px 30px rgba(255,255,255,0.18);
+    transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  }
+  .btn-primary:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 12px 40px rgba(255,255,255,0.28); }
+  .btn-primary:active { transform: translateY(0) scale(0.98); }
+  .btn-ghost {
+    font-size: 14px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.65);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(255,255,255,0.25);
+    padding-bottom: 2px;
+    transition: color 0.2s var(--ease);
+  }
+  .btn-ghost:hover { color: #fff; }
+  .hero-note {
+    font-size: 13px;
+    color: rgba(255,255,255,0.45);
+    margin-bottom: 64px;
+    opacity: 0;
+    animation: rise 0.8s var(--ease) 0.3s forwards;
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* --- Device mockup --- */
+  .device-stage {
+    display: flex;
+    justify-content: center;
+    padding: 0 0 0;
+    opacity: 0;
+    animation: rise 1s var(--ease) 0.36s forwards;
+  }
+  .phone {
+    width: 300px;
+    border-radius: 46px;
+    background: linear-gradient(160deg, #2b2b2f, #060607);
+    padding: 14px;
+    box-shadow: 0 40px 90px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06) inset;
+  }
+  .phone-screen {
+    background: #fff;
+    border-radius: 34px;
+    overflow: hidden;
+    position: relative;
+    aspect-ratio: 300 / 610;
+  }
+  .phone-notch {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 84px;
+    height: 20px;
+    background: #060607;
+    border-radius: 12px;
+    z-index: 5;
+  }
+  .mock-page { padding: 44px 18px 18px; font-family: inherit; }
+  .mock-title { font-size: 19px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 10px; color: #0b0b0c; }
+  .mock-line { height: 9px; border-radius: 5px; background: #ececee; margin-bottom: 8px; }
+  .mock-line.w80 { width: 80%; }
+  .mock-line.w60 { width: 60%; }
+  .mock-hl { background: linear-gradient(transparent 55%, #ffe066 55%); display: inline; padding: 0 2px; font-size: 13px; color: #0b0b0c; }
+  .mock-card { margin-top: 14px; padding: 10px; border-radius: 12px; background: #f5f5f7; }
+  .mock-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #0b0b0c; margin-bottom: 7px; }
+  .mock-box { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid #cfcfd4; flex-shrink: 0; }
+  .mock-box.on { background: #0b0b0c; border-color: #0b0b0c; }
+  .mock-strike { text-decoration: line-through; color: #9a9a9e; }
+  .mock-table { margin-top: 12px; border-radius: 10px; overflow: hidden; border: 1px solid #ececee; }
+  .mock-table .row { display: flex; }
+  .mock-table .cell { flex: 1; height: 22px; border: 1px solid #ececee; }
+  .mock-table .row:first-child .cell { background: #f5f5f7; }
+
+  /* --- Trust bar --- */
+  .trustbar {
+    background: #000;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding: 28px 24px 60px;
+  }
+  .trust-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 14px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .trust-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.75);
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 8px 14px;
+    border-radius: 999px;
+  }
+  .trust-chip svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* --- Features --- */
+  .features { background: var(--surface); padding: 100px 24px; }
+  .section-head { text-align: center; max-width: 640px; margin: 0 auto 64px; }
+  .section-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .section-title { font-size: clamp(30px, 4vw, 44px); font-weight: 800; letter-spacing: -0.03em; margin: 0 0 14px; }
+  .section-sub { font-size: 17px; color: var(--muted); line-height: 1.6; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; max-width: 1080px; margin: 0 auto; }
+  .card {
+    background: #fff;
+    border-radius: var(--radius);
+    padding: 32px 28px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 20px 40px rgba(0,0,0,0.05);
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 0.6s var(--ease), transform 0.6s var(--ease), box-shadow 0.25s var(--ease);
+  }
+  .card.in { opacity: 1; transform: translateY(0); }
+  .card:hover { box-shadow: 0 4px 10px rgba(0,0,0,0.06), 0 30px 60px rgba(0,0,0,0.09); }
+  .card-icon {
+    width: 44px; height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 13px;
+    background: var(--ink);
+    color: #fff;
+    margin-bottom: 20px;
+  }
+  .card-icon svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .card h3 { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .card p { font-size: 14.5px; color: var(--muted); line-height: 1.6; margin: 0; }
+
+  /* --- Closing CTA --- */
+  .closing {
+    background: #000;
+    color: #fff;
+    text-align: center;
+    padding: 110px 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .closing h2 {
+    font-size: clamp(32px, 5vw, 52px);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin: 0 0 16px;
+  }
+  .closing p { font-size: 17px; color: rgba(255,255,255,0.65); margin: 0 0 36px; }
+
+  footer {
+    padding: 32px 24px 40px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--muted);
+    background: var(--surface);
+  }
+  footer a { text-decoration: underline; text-underline-offset: 2px; }
+</style>
 </head>
 <body>
-  <p>Redirection vers <a href="noteflow/">NoteFlow</a>…</p>
+
+<nav class="topnav">
+  <span class="brand">NoteFlow</span>
+  <a class="nav-cta" href="noteflow/">Ouvrir l'app</a>
+</nav>
+
+<header class="hero">
+  <div class="hero-glow" aria-hidden="true">
+    <span class="g1"></span><span class="g2"></span><span class="g3"></span>
+  </div>
+  <div class="hero-inner">
+    <span class="eyebrow">NoteFlow</span>
+    <h1 class="hero-title">Toutes tes idées.<br><em>Un seul endroit.</em></h1>
+    <p class="hero-sub">Texte, dessin, tableaux et listes — sur la même page, sans jongler entre dix applications. Et tout reste sur ton appareil.</p>
+    <div class="hero-ctas">
+      <a class="btn-primary" href="noteflow/">
+        Ouvrir NoteFlow — gratuit
+      </a>
+      <a class="btn-ghost" href="#fonctionnalites">Découvrir</a>
+    </div>
+    <p class="hero-note">Aucun compte. Aucune carte bancaire. 10 secondes pour commencer.</p>
+    <div class="device-stage">
+      <div class="phone">
+        <div class="phone-screen">
+          <div class="phone-notch"></div>
+          <div class="mock-page">
+            <div class="mock-title">Idées de la semaine</div>
+            <div class="mock-line w80"></div>
+            <div class="mock-line w60"></div>
+            <div style="margin: 10px 0;"><span class="mock-hl">surligne ce qui compte</span></div>
+            <div class="mock-card">
+              <div class="mock-check"><span class="mock-box on"></span><span class="mock-strike">Définir le plan</span></div>
+              <div class="mock-check"><span class="mock-box"></span><span>Écrire la première page</span></div>
+            </div>
+            <div class="mock-table">
+              <div class="row"><div class="cell"></div><div class="cell"></div><div class="cell"></div></div>
+              <div class="row"><div class="cell"></div><div class="cell"></div><div class="cell"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="trustbar">
+    <div class="trust-row">
+      <span class="trust-chip"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>100% local</span>
+      <span class="trust-chip"><svg viewBox="0 0 24 24"><path d="M12 2l9 4.5v6c0 5-3.6 8.7-9 9.5-5.4-.8-9-4.5-9-9.5v-6z"/></svg>Gratuit, sans pub</span>
+      <span class="trust-chip"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>Aucun compte requis</span>
+      <span class="trust-chip"><svg viewBox="0 0 24 24"><path d="M4 12h16M4 6h16M4 18h10"/></svg>Fonctionne hors-ligne</span>
+    </div>
+  </div>
+</header>
+
+<section class="features" id="fonctionnalites">
+  <div class="section-head">
+    <div class="section-eyebrow">Pourquoi NoteFlow</div>
+    <h2 class="section-title">Pensé pour écrire vite,<br>et retrouver plus vite encore.</h2>
+    <p class="section-sub">Chaque détail a été pensé pour disparaître derrière tes idées — pas pour te ralentir.</p>
+  </div>
+  <div class="grid" id="feature-grid">
+    <div class="card">
+      <div class="card-icon"><svg viewBox="0 0 24 24"><path d="M4 20l1-4L15 6l3 3-10 10-4 1z"/><path d="M13 8l3 3"/></svg></div>
+      <h3>Écris et dessine au même endroit</h3>
+      <p>Surligne tes phrases, annote tes idées, sans jamais changer d'écran. Le dessin vit sur la même page que le texte.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon"><svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 12l2.8 2.8L16.5 9"/></svg></div>
+      <h3>De vrais tableaux, de vraies listes</h3>
+      <p>Un carnet de notes complet — tableaux, to-do, listes numérotées — pas juste un champ de texte brut.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></div>
+      <h3>Tes notes t'appartiennent</h3>
+      <p>Tout est stocké en local, sur ton appareil. Active la synchronisation seulement si tu le souhaites, avec ton propre code.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M16 21h3a2 2 0 002-2v-3M8 21H5a2 2 0 01-2-2v-3"/><circle cx="12" cy="12" r="3.2"/></svg></div>
+      <h3>Pensé jusqu'au moindre détail</h3>
+      <p>Mode focus, verrouillage par code, historique de versions, rappels, corbeille récupérable. Rien n'a été laissé au hasard.</p>
+    </div>
+  </div>
+</section>
+
+<section class="closing">
+  <h2>Commence en 10 secondes.</h2>
+  <p>Pas d'inscription. Pas d'attente. Juste toi et tes idées.</p>
+  <a class="btn-primary" href="noteflow/">Ouvrir NoteFlow — gratuit</a>
+</section>
+
+<footer>
+  NoteFlow — fait pour durer, pas pour te vendre. <a href="noteflow/">Ouvrir l'application</a>
+</footer>
+
+<script>
+  var cards = document.querySelectorAll('.card');
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in');
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15 });
+    cards.forEach(function (c) { io.observe(c); });
+  } else {
+    cards.forEach(function (c) { c.classList.add('in'); });
+  }
+</script>
+
 </body>
 </html>
