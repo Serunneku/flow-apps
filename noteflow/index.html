@@ -1,3 +1,6 @@
+<!doctype html>
+<html lang="fr">
+<head>
 <meta charset="UTF-8" />
 <title>NoteFlow</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -9,6 +12,8 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png" />
 <link rel="manifest" href="manifest.json" />
 <link rel="stylesheet" href="style.css" />
+</head>
+<body>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -284,7 +289,7 @@
     <div class="page-scroll">
       <div id="note-page" class="note-page">
         <canvas id="draw-canvas"></canvas>
-        <div id="text-editor" class="text-editor" contenteditable="true" data-placeholder="Écris ta note ici…"></div>
+        <div id="text-editor" class="text-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Contenu de la note" data-placeholder="Écris ta note ici…"></div>
       </div>
       <button type="button" id="grow-page-btn" class="grow-page-btn">+ Agrandir la page</button>
     </div>
@@ -319,3 +324,5 @@
 </div>
 
 <script src="app.js"></script>
+</body>
+</html>

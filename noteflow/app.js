@@ -117,24 +117,43 @@ updateStreakBadge();
 function setupMenu(btnId, panelId) {
   const btn = document.getElementById(btnId);
   const panel = document.getElementById(panelId);
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.setAttribute("aria-expanded", "false");
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     const willOpen = panel.classList.contains("hidden");
     document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
-    if (willOpen) panel.classList.remove("hidden");
+    document.querySelectorAll(".menu-wrap .icon-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+    if (willOpen) {
+      panel.classList.remove("hidden");
+      btn.setAttribute("aria-expanded", "true");
+    }
   });
   panel.addEventListener("click", (e) => {
-    if (e.target.closest(".menu-item")) panel.classList.add("hidden");
+    if (e.target.closest(".menu-item")) {
+      panel.classList.add("hidden");
+      btn.setAttribute("aria-expanded", "false");
+    }
   });
   return panel;
 }
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".menu-wrap")) {
     document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+    document.querySelectorAll(".menu-wrap .icon-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
   }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+  if (e.key === "Escape") {
+    document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+    document.querySelectorAll(".menu-wrap .icon-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+  }
+});
+
+// Every icon-only button that has a hover title but no explicit aria-label
+// gets one automatically, so screen readers announce it (not just mouse hover).
+document.querySelectorAll("button[title]:not([aria-label])").forEach((btn) => {
+  btn.setAttribute("aria-label", btn.getAttribute("title"));
 });
 setupMenu("list-menu-btn", "list-menu");
 setupMenu("editor-menu-btn", "editor-menu");
@@ -220,6 +239,11 @@ document.addEventListener("mousedown", (e) => {
   if (e.target.closest(".custom-select-trigger, .custom-select-option")) e.preventDefault();
 });
 
+function setPressed(el, state) {
+  el.classList.toggle("active", state);
+  el.setAttribute("aria-pressed", String(!!state));
+}
+
 // --- Toast (with optional undo) ---
 const toastEl = document.getElementById("toast");
 const toastText = document.getElementById("toast-text");
@@ -250,6 +274,15 @@ const listScreen = document.getElementById("list-screen");
 const editorScreen = document.getElementById("editor-screen");
 
 function showList() {
+  // Leaving a locked note's editor always re-locks it in memory too: its
+  // plaintext body/drawing/history are dropped and the unlock key forgotten,
+  // so reopening it requires the PIN again, exactly like before encryption.
+  if (currentNote && currentNote.locked && activeUnlockKey && activeUnlockKey.noteId === currentNote.id) {
+    currentNote.html = "";
+    currentNote.drawing = null;
+    currentNote.history = [];
+    activeUnlockKey = null;
+  }
   listScreen.classList.add("active");
   editorScreen.classList.remove("active");
   renderList();
@@ -717,6 +750,8 @@ function newNoteObject() {
     fontSize: 15,
     locked: false,
     pinCode: null,
+    pinSalt: null,
+    encBlob: null,
     reminderAt: null,
     reminderFired: false,
     history: [],
@@ -749,9 +784,9 @@ function loadNoteIntoEditor() {
   titleInput.value = currentNote.title || "";
   folderInput.value = currentNote.folder || "";
   textEditor.innerHTML = currentNote.html || "";
-  pinBtn.classList.toggle("active", !!currentNote.pinned);
+  setPressed(pinBtn, !!currentNote.pinned);
   setLockIcon(!!currentNote.locked);
-  lockBtn.classList.toggle("active", !!currentNote.locked);
+  setPressed(lockBtn, !!currentNote.locked);
   saveIndicator.textContent = "";
   notePage.style.minHeight = (currentNote.pageHeight || 700) + "px";
   textEditor.style.minHeight = (currentNote.pageHeight || 700) + "px";
@@ -789,6 +824,10 @@ sizeSelect.addEventListener("change", () => {
 });
 
 duplicateNoteBtn.addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour la dupliquer");
+    return;
+  }
   flushSave(true);
   const copy = JSON.parse(JSON.stringify(currentNote));
   copy.id = crypto.randomUUID();
@@ -820,7 +859,7 @@ backBtn.addEventListener("click", () => {
 
 pinBtn.addEventListener("click", () => {
   currentNote.pinned = !currentNote.pinned;
-  pinBtn.classList.toggle("active", currentNote.pinned);
+  setPressed(pinBtn, currentNote.pinned);
   scheduleSave();
 });
 
@@ -968,8 +1007,8 @@ const growPageBtn = document.getElementById("grow-page-btn");
 function setMode(mode) {
   notePage.classList.toggle("mode-text", mode === "text");
   notePage.classList.toggle("mode-draw", mode === "draw");
-  modeTextBtn.classList.toggle("active", mode === "text");
-  modeDrawBtn.classList.toggle("active", mode === "draw");
+  setPressed(modeTextBtn, mode === "text");
+  setPressed(modeDrawBtn, mode === "draw");
   document.getElementById("format-toolbar").classList.toggle("hidden", mode !== "text");
   drawToolbar.classList.toggle("hidden", mode !== "draw");
   drawHint.classList.toggle("hidden", mode !== "draw");
@@ -999,11 +1038,53 @@ function setLockIcon(locked) {
   lockBtn.innerHTML = `<svg class="icon"><use href="#icon-lock-${locked ? "closed" : "open"}"/></svg>`;
 }
 
+// --- Real encryption for locked notes (AES-GCM, key derived from the PIN via
+// PBKDF2). `pinCode` (a bare SHA-256 hash) only exists on notes locked before
+// this scheme: it verifies the PIN once, then the note is migrated in place.
 async function hashPin(pin) {
   const data = new TextEncoder().encode(pin);
   const digest = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+function bytesToB64(bytes) {
+  let bin = "";
+  bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin);
+}
+function b64ToBytes(b64) {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+async function deriveKey(pin, saltBytes) {
+  const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: saltBytes, iterations: 150000, hash: "SHA-256" },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptString(key, plaintext) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext));
+  return { iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(data)) };
+}
+
+async function decryptString(key, enc) {
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(enc.iv) }, key, b64ToBytes(enc.data));
+  return new TextDecoder().decode(plain);
+}
+
+// Holds the AES key for the note currently unlocked in this session, so edits
+// keep re-encrypting on save without re-prompting for the PIN. Cleared as soon
+// as the note is no longer the open one (see showList()), so leaving the
+// editor always requires the PIN again next time, exactly like before.
+let activeUnlockKey = null;
+let lockFailCount = 0;
+let lockLockedUntil = 0;
 
 function showLockOverlay() {
   pendingUnlockNoteId = currentNote.id;
@@ -1016,17 +1097,55 @@ function showLockOverlay() {
 async function attemptUnlock() {
   const note = notes.find((n) => n.id === pendingUnlockNoteId);
   if (!note) return;
-  const hash = await hashPin(lockInput.value);
-  if (hash === note.pinCode) {
-    lockOverlay.classList.add("hidden");
-    currentNote = note;
-    loadNoteIntoEditor();
-    showEditor();
-  } else {
+  if (Date.now() < lockLockedUntil) {
+    lockError.textContent = `Trop de tentatives, réessaie dans ${Math.ceil((lockLockedUntil - Date.now()) / 1000)}s`;
+    lockError.classList.remove("hidden");
+    return;
+  }
+  const pin = lockInput.value;
+  let key = null;
+  let plainBlob = null;
+  try {
+    if (note.pinSalt && note.encBlob) {
+      key = await deriveKey(pin, b64ToBytes(note.pinSalt));
+      plainBlob = JSON.parse(await decryptString(key, note.encBlob));
+    } else if (note.pinCode) {
+      const hash = await hashPin(pin);
+      if (hash !== note.pinCode) throw new Error("wrong pin");
+      // Legacy note locked before real encryption existed: its content is
+      // still stored in clear. Migrate it to AES-GCM right now.
+      plainBlob = { html: note.html, drawing: note.drawing, history: note.history };
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      key = await deriveKey(pin, salt);
+      note.pinSalt = bytesToB64(salt);
+      note.pinCode = null;
+    } else {
+      throw new Error("no pin set on this note");
+    }
+  } catch {
+    lockFailCount++;
+    if (lockFailCount >= 5) {
+      lockLockedUntil = Date.now() + 30000;
+      lockFailCount = 0;
+      lockError.textContent = "Trop de tentatives, réessaie dans 30s";
+    } else {
+      lockError.textContent = "Code incorrect";
+    }
     lockError.classList.remove("hidden");
     lockInput.value = "";
     lockInput.focus();
+    return;
   }
+  lockFailCount = 0;
+  activeUnlockKey = { noteId: note.id, key };
+  note.html = plainBlob.html || "";
+  note.drawing = plainBlob.drawing || null;
+  note.history = plainBlob.history || [];
+  await persistNote(note);
+  lockOverlay.classList.add("hidden");
+  currentNote = note;
+  loadNoteIntoEditor();
+  showEditor();
 }
 
 lockUnlockBtn.addEventListener("click", attemptUnlock);
@@ -1043,26 +1162,56 @@ lockBtn.addEventListener("click", async () => {
   if (!currentNote.locked) {
     const pin = window.prompt("Choisis un code (4 chiffres ou plus) pour verrouiller cette note :");
     if (!pin) return;
-    currentNote.pinCode = await hashPin(pin);
+    currentNote.title = titleInput.value.trim();
+    currentNote.folder = folderInput.value.trim();
+    currentNote.html = textEditor.innerHTML;
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key = await deriveKey(pin, salt);
+    currentNote.pinSalt = bytesToB64(salt);
+    currentNote.pinCode = null;
     currentNote.locked = true;
-    setLockIcon(true);
-    lockBtn.classList.add("active");
-    scheduleSave();
-    showToast("Note verrouillée");
+    activeUnlockKey = { noteId: currentNote.id, key };
+    await persistNote(currentNote);
+    activeUnlockKey = null;
+    textEditor.innerHTML = "";
+    currentNote.html = "";
+    currentNote.drawing = null;
+    redrawStrokes();
+    showToast("Note verrouillée et chiffrée");
+    showList();
   } else {
     const pin = window.prompt("Entre le code pour retirer le verrou :");
     if (pin === null) return;
-    const hash = await hashPin(pin);
-    if (hash === currentNote.pinCode) {
-      currentNote.locked = false;
-      currentNote.pinCode = null;
-      setLockIcon(false);
-      lockBtn.classList.remove("active");
-      scheduleSave();
-      showToast("Verrou retiré");
-    } else {
+    let key = null;
+    let plainBlob = null;
+    try {
+      if (currentNote.pinSalt && currentNote.encBlob) {
+        key = await deriveKey(pin, b64ToBytes(currentNote.pinSalt));
+        plainBlob = JSON.parse(await decryptString(key, currentNote.encBlob));
+      } else if (currentNote.pinCode) {
+        const hash = await hashPin(pin);
+        if (hash !== currentNote.pinCode) throw new Error("wrong pin");
+        plainBlob = { html: currentNote.html, drawing: currentNote.drawing, history: currentNote.history };
+      } else {
+        throw new Error("no pin set");
+      }
+    } catch {
       showToast("Code incorrect");
+      return;
     }
+    currentNote.locked = false;
+    currentNote.pinSalt = null;
+    currentNote.pinCode = null;
+    currentNote.encBlob = null;
+    currentNote.html = plainBlob.html || "";
+    currentNote.drawing = plainBlob.drawing || null;
+    currentNote.history = plainBlob.history || [];
+    activeUnlockKey = null;
+    await persistNote(currentNote);
+    setLockIcon(false);
+    setPressed(lockBtn, false);
+    loadNoteIntoEditor();
+    showToast("Verrou retiré");
   }
 });
 
@@ -1761,7 +1910,7 @@ function updateToolbarState() {
     } catch {
       active = false;
     }
-    btn.classList.toggle("active", active);
+    setPressed(btn, active);
   });
   updateFontSelectState();
   updateStyleSelectState();
@@ -1791,9 +1940,9 @@ let activeStroke = null;
 function setTool(tool) {
   isErasing = tool === "eraser";
   isHighlighting = tool === "highlighter";
-  penBtn.classList.toggle("active", tool === "pen");
-  highlighterBtn.classList.toggle("active", tool === "highlighter");
-  eraserBtn.classList.toggle("active", tool === "eraser");
+  setPressed(penBtn, tool === "pen");
+  setPressed(highlighterBtn, tool === "highlighter");
+  setPressed(eraserBtn, tool === "eraser");
   renderColorRow();
 }
 
@@ -1810,7 +1959,7 @@ function renderColorRow() {
     swatch.addEventListener("click", () => {
       drawColor = color;
       isErasing = false;
-      eraserBtn.classList.remove("active");
+      setPressed(eraserBtn, false);
       colorRow.querySelectorAll(".color-swatch").forEach((s) => s.classList.remove("selected"));
       swatch.classList.add("selected");
     });
@@ -1825,8 +1974,8 @@ highlighterBtn.addEventListener("click", () => setTool("highlighter"));
 document.querySelectorAll(".width-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     drawWidth = Number(btn.dataset.width);
-    document.querySelectorAll(".width-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
+    document.querySelectorAll(".width-btn").forEach((b) => setPressed(b, false));
+    setPressed(btn, true);
   });
 });
 
@@ -2048,6 +2197,19 @@ async function handleRemoteSnapshot(snapshot) {
 
 async function persistNote(note) {
   recordActivityToday();
+  // A locked note is never written to IndexedDB/Firestore in clear: while an
+  // unlock key is active for it, its body/drawing/history are swapped for an
+  // AES-GCM ciphertext just for the write, then restored in memory right after.
+  let restore = null;
+  if (note.locked && activeUnlockKey && activeUnlockKey.noteId === note.id) {
+    const blob = JSON.stringify({ html: note.html, drawing: note.drawing, history: note.history });
+    const enc = await encryptString(activeUnlockKey.key, blob);
+    restore = { html: note.html, drawing: note.drawing, history: note.history };
+    note.encBlob = enc;
+    note.html = "";
+    note.drawing = null;
+    note.history = [];
+  }
   await dbPut(note);
   if (syncDb && syncCode && !applyingRemoteChange) {
     try {
@@ -2055,6 +2217,11 @@ async function persistNote(note) {
     } catch (err) {
       console.warn("sync push failed", err);
     }
+  }
+  if (restore) {
+    note.html = restore.html;
+    note.drawing = restore.drawing;
+    note.history = restore.history;
   }
 }
 
