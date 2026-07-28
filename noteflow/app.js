@@ -472,6 +472,31 @@ TEXT_COLORS.forEach((color) => {
 });
 
 const fontSelect = document.getElementById("font-select");
+const FONTS = [
+  { label: "Par défaut", value: "" },
+  { label: "Serif classique", value: "Georgia, serif" },
+  { label: "Serif éditoriale", value: "'Iowan Old Style', Palatino, 'Book Antiqua', serif" },
+  { label: "Times", value: "'Times New Roman', Times, serif" },
+  { label: "Didot", value: "Didot, Georgia, serif" },
+  { label: "Sans moderne", value: "Helvetica, Arial, sans-serif" },
+  { label: "Trebuchet", value: "'Trebuchet MS', sans-serif" },
+  { label: "Verdana", value: "Verdana, sans-serif" },
+  { label: "Compacte", value: "'Arial Narrow', Arial, sans-serif" },
+  { label: "Machine à écrire", value: "'Courier New', Courier, monospace" },
+  { label: "Mono moderne", value: "Menlo, Consolas, monospace" },
+  { label: "Manuscrite", value: "'Bradley Hand', 'Segoe Script', cursive" },
+  { label: "Manuscrite élégante", value: "'Brush Script MT', cursive" },
+  { label: "Chalkboard", value: "'Chalkboard SE', 'Comic Sans MS', cursive" },
+  { label: "Titrage", value: "Impact, 'Arial Black', sans-serif" },
+  { label: "Futuriste", value: "Copperplate, fantasy" },
+];
+FONTS.forEach((f) => {
+  const opt = document.createElement("option");
+  opt.value = f.value;
+  opt.textContent = f.label;
+  opt.style.fontFamily = f.value || "inherit";
+  fontSelect.appendChild(opt);
+});
 fontSelect.addEventListener("mousedown", (e) => e.stopPropagation());
 fontSelect.addEventListener("change", () => {
   restoreSelection();

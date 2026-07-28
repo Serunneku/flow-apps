@@ -79,27 +79,31 @@
         <button type="button" data-cmd="bold" title="Gras"><b>B</b></button>
         <button type="button" data-cmd="italic" title="Italique"><i>I</i></button>
         <button type="button" data-cmd="underline" title="Souligné"><u>U</u></button>
+        <button type="button" data-cmd="strikeThrough" title="Barré"><s>S</s></button>
         <button type="button" data-cmd="heading" title="Titre">H</button>
+      </div>
+      <div class="toolbar-group">
+        <button type="button" data-cmd="justifyLeft" title="Aligner à gauche">⇤</button>
+        <button type="button" data-cmd="justifyCenter" title="Centrer">↔</button>
+        <button type="button" data-cmd="justifyRight" title="Aligner à droite">⇥</button>
       </div>
       <div class="toolbar-group">
         <button type="button" data-cmd="insertUnorderedList" title="Liste à puces">☰</button>
         <button type="button" data-cmd="checklist" title="Liste à cocher">☑</button>
+        <button type="button" data-cmd="removeFormat" title="Effacer la mise en forme">⊘</button>
       </div>
       <div class="toolbar-group text-color-row" id="text-color-row"></div>
       <div class="toolbar-group">
-        <select id="font-select" title="Police">
-          <option value="">Par défaut</option>
-          <option value="Georgia, serif">Serif</option>
-          <option value="'Courier New', monospace">Machine à écrire</option>
-          <option value="'Bradley Hand', 'Comic Sans MS', cursive">Manuscrite</option>
-        </select>
+        <select id="font-select" title="Police"></select>
       </div>
       <div class="toolbar-group">
         <select id="size-select" title="Taille du texte">
+          <option value="13">Très petit</option>
           <option value="14">Petit</option>
           <option value="15" selected>Moyen</option>
-          <option value="18">Grand</option>
-          <option value="22">Très grand</option>
+          <option value="17">Grand</option>
+          <option value="20">Très grand</option>
+          <option value="24">Énorme</option>
         </select>
       </div>
     </div>

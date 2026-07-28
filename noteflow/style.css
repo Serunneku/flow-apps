@@ -117,15 +117,7 @@ body {
   justify-content: space-between;
   padding: 20px 4px 12px;
   gap: 10px;
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  background: var(--surface-glass);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  margin: 0 -16px;
-  padding-left: 16px;
-  padding-right: 16px;
+  background: transparent;
 }
 
 .topbar h1 {
@@ -198,12 +190,25 @@ button {
 #sort-select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--surface);
+  background-color: var(--surface);
   color: var(--text);
   font-size: 13px;
-  padding: 0 10px;
+  padding: 0 24px 0 12px;
   box-shadow: var(--shadow-sm);
   cursor: pointer;
+}
+
+#size-select {
+  border: none;
+  background-color: transparent;
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 22px 6px 8px;
+  height: 30px;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .search-input:focus {
@@ -580,17 +585,28 @@ button {
   color: var(--accent-text);
 }
 
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%238e8e93" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
 #font-select {
   border: none;
-  background: transparent;
+  background-color: transparent;
   color: var(--text);
   border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
-  padding: 6px 8px;
+  padding: 6px 22px 6px 8px;
   height: 30px;
   cursor: pointer;
   flex-shrink: 0;
+  max-width: 130px;
+  text-overflow: ellipsis;
 }
 
 .text-color-row,
