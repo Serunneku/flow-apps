@@ -2967,6 +2967,63 @@ imageInput.addEventListener("change", () => {
   imageInput.value = "";
 });
 
+// --- Voice notes (MediaRecorder, 100% local — the audio is stored as a
+// data URL right inside the note's html, exactly like a pasted image). ---
+const voiceNoteBtn = document.getElementById("voice-note-btn");
+let activeRecorder = null;
+let audioChunks = [];
+
+function setVoiceBtnRecording(recording) {
+  setPressed(voiceNoteBtn, recording);
+  voiceNoteBtn.title = recording ? "Arrêter l'enregistrement" : "Enregistrer une note vocale";
+}
+
+voiceNoteBtn.addEventListener("click", async () => {
+  if (activeRecorder && activeRecorder.state === "recording") {
+    activeRecorder.stop();
+    return;
+  }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    showToast("Enregistrement audio non disponible sur ce navigateur");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    activeRecorder = new MediaRecorder(stream);
+    activeRecorder.addEventListener("dataavailable", (e) => {
+      if (e.data.size) audioChunks.push(e.data);
+    });
+    activeRecorder.addEventListener("stop", () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(audioChunks, { type: "audio/webm" });
+      const reader = new FileReader();
+      reader.onload = () => {
+        restoreSelection();
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.src = reader.result;
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
+          const range = sel.getRangeAt(0);
+          range.collapse(false);
+          range.insertNode(audio);
+        } else {
+          textEditor.appendChild(audio);
+        }
+        scheduleSave();
+        setVoiceBtnRecording(false);
+      };
+      reader.readAsDataURL(blob);
+    });
+    activeRecorder.start();
+    setVoiceBtnRecording(true);
+    showToast("Enregistrement en cours… touche à nouveau pour arrêter");
+  } catch {
+    showToast("Micro indisponible ou accès refusé");
+  }
+});
+
 textEditor.addEventListener("paste", (e) => {
   const items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
