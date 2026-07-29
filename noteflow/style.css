@@ -420,6 +420,22 @@ button {
   opacity: 0.8;
 }
 
+.gold-dust {
+  position: fixed;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--gold);
+  pointer-events: none;
+  z-index: 999;
+  animation: goldDustFly 0.5s ease-out forwards;
+}
+
+@keyframes goldDustFly {
+  from { transform: translate(0, 0) scale(1); opacity: 0.9; }
+  to { transform: translate(var(--dx), var(--dy)) scale(0.3); opacity: 0; }
+}
+
 .busy-guard {
   opacity: 0.55;
   pointer-events: none;
@@ -854,6 +870,12 @@ button {
   color: var(--text);
   cursor: pointer;
   transition: border-color 0.15s var(--ease), color 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+
+.folder-chip {
+  border-left-color: var(--gold);
+  border-left-style: solid;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease), background-color 0.15s var(--ease), border-left-width 0.15s var(--ease);
 }
 
 .tag-filter-chip.active {
@@ -1492,7 +1514,8 @@ select option {
   z-index: 3;
   pointer-events: none;
   border-radius: inherit;
-  box-shadow: inset 10px 0 16px -14px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 10px 0 16px -14px rgba(0, 0, 0, calc(0.35 + var(--scroll-depth, 0) * 0.25));
+  transition: box-shadow 0.15s var(--ease);
 }
 
 @keyframes pageTurn {
@@ -1600,6 +1623,18 @@ select option {
 .text-editor h2:first-child { margin-top: 0; }
 
 .text-editor p { margin: 0 0 0.6em; }
+
+/* A decorative drop cap on long notes only — purely typographic, no
+   functional meaning, toggled once a note passes a length threshold. */
+.text-editor.long-note > p:first-child::first-letter,
+.text-editor.long-note > *:first-child > p:first-child::first-letter {
+  float: left;
+  font-size: 2.8em;
+  line-height: 0.85;
+  font-weight: 700;
+  padding: 0.05em 0.08em 0 0;
+  color: var(--paper-gold-ink);
+}
 
 .text-editor ul, .text-editor ol {
   padding-left: 22px;

@@ -391,6 +391,25 @@ function guardDoubleClick(el, handler) {
   });
 }
 
+// A short burst of gold particles confirming a successful drag-and-drop,
+// instead of only the (easy to miss) list re-render.
+function spawnGoldDust(x, y) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const count = 8;
+  for (let i = 0; i < count; i++) {
+    const dot = document.createElement("span");
+    dot.className = "gold-dust";
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+    const dist = 16 + Math.random() * 18;
+    dot.style.left = x + "px";
+    dot.style.top = y + "px";
+    dot.style.setProperty("--dx", `${Math.cos(angle) * dist}px`);
+    dot.style.setProperty("--dy", `${Math.sin(angle) * dist}px`);
+    document.body.appendChild(dot);
+    dot.addEventListener("animationend", () => dot.remove());
+  }
+}
+
 // --- Toast (with optional undo) ---
 const toastEl = document.getElementById("toast");
 const toastText = document.getElementById("toast-text");
@@ -663,8 +682,12 @@ function renderFolderFilters() {
     const depth = parts.length - 1;
     const chip = document.createElement("button");
     chip.type = "button";
-    chip.className = "tag-filter-chip" + (activeFolderFilter === folder ? " active" : "");
+    chip.className = "tag-filter-chip folder-chip" + (activeFolderFilter === folder ? " active" : "");
     if (depth > 0) chip.style.marginLeft = `${depth * 14}px`;
+    // A thicker "spine" for folders holding more notes — like books lined
+    // up on a shelf by how full they are.
+    const noteCount = notes.filter((n) => !n.deletedAt && (n.folder === folder || (n.folder || "").startsWith(folder + "/"))).length;
+    chip.style.borderLeftWidth = `${Math.min(2 + Math.round(noteCount / 2), 8)}px`;
     chip.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
     chip.title = folder;
     chip.addEventListener("click", () => {
@@ -679,6 +702,7 @@ function renderFolderFilters() {
       if (note) {
         note.folder = folder;
         persistNote(note);
+        spawnGoldDust(e.clientX, e.clientY);
         renderList();
       }
     });
@@ -1165,6 +1189,7 @@ function updateWordCount(instant) {
   const text = textEditor.textContent.trim();
   const words = text ? text.split(/\s+/).length : 0;
   const chars = text.length;
+  textEditor.classList.toggle("long-note", words > 200);
   cancelAnimationFrame(wordCountAnimFrame);
   if (instant) {
     displayedWordCount = words;
@@ -1578,6 +1603,12 @@ textEditor.addEventListener("input", () => {
 
 // --- Mode switch (unified page: text vs draw) ---
 const notePage = document.getElementById("note-page");
+const pageScrollEl = document.getElementById("page-scroll");
+pageScrollEl.addEventListener("scroll", () => {
+  const max = pageScrollEl.scrollHeight - pageScrollEl.clientHeight;
+  const depth = max > 0 ? Math.min(1, pageScrollEl.scrollTop / max) : 0;
+  notePage.style.setProperty("--scroll-depth", depth.toFixed(2));
+});
 const modeTextBtn = document.getElementById("mode-text-btn");
 const modeDrawBtn = document.getElementById("mode-draw-btn");
 const drawToolbar = document.getElementById("draw-toolbar");
