@@ -2465,9 +2465,28 @@ canvas.addEventListener("pointermove", (e) => {
   ctx.restore();
 });
 
+// A real highlighter follows the line, not the wobble of a hand-drawn
+// stroke: once the stroke is finished, flatten it to a single straight
+// horizontal bar at its average height, spanning from the first point
+// reached to the last — however many words it was dragged across.
+function snapHighlightStroke(stroke) {
+  if (!stroke.highlight || stroke.points.length < 2) return;
+  const avgY = stroke.points.reduce((sum, p) => sum + p.y, 0) / stroke.points.length;
+  const xs = stroke.points.map((p) => p.x);
+  stroke.points = [
+    { x: Math.min(...xs), y: avgY },
+    { x: Math.max(...xs), y: avgY },
+  ];
+}
+
 function endStroke() {
   if (!activeStroke) return;
+  const stroke = activeStroke;
   activeStroke = null;
+  if (stroke.highlight) {
+    snapHighlightStroke(stroke);
+    redrawStrokes();
+  }
   scheduleSave();
 }
 canvas.addEventListener("pointerup", endStroke);
