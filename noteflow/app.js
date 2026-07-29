@@ -1032,6 +1032,7 @@ NOTE_COLORS.forEach((c) => {
     notePage.style.backgroundColor = c.key || "";
     updateNoteColorSelection();
     scheduleSave();
+    colorPanel.classList.add("hidden");
   });
   noteColorRow.appendChild(swatch);
 });
@@ -1066,6 +1067,7 @@ PAPER_STYLES.forEach((p) => {
     notePage.dataset.paper = p.key;
     updatePaperStyleSelection();
     scheduleSave();
+    paperPanel.classList.add("hidden");
   });
   paperStyleRow.appendChild(btn);
 });
@@ -1383,6 +1385,7 @@ reminderClearBtn.addEventListener("click", () => {
   currentNote.reminderFired = false;
   reminderInput.value = "";
   scheduleSave();
+  reminderPanel.classList.add("hidden");
   showToast("Rappel supprimé");
 });
 
@@ -1490,10 +1493,32 @@ function renderBacklinks() {
 // is converted with direct DOM moves rather than execCommand("formatBlock"/
 // "insertUnorderedList"): on a collapsed caret those commands proved unreliable
 // (no-op on the first line of a fresh note, or wrapping unrelated content).
+// selectNodeContents(el).collapse() can land the caret on an {element,
+// child-index} boundary instead of a {textNode, charOffset} one (e.g. when
+// el's only child is a plain text node). That boundary is fine for our own
+// reads, but the very next *native* keystroke doesn't reliably anchor to it
+// when el has a sibling like the checklist checkbox — the typed text ends up
+// escaping outside el entirely. Walking into the actual text descendant
+// before handing the range to the browser avoids that.
 function placeCaretAtEnd(el) {
   const r = document.createRange();
   r.selectNodeContents(el);
   r.collapse(false);
+  let node = el;
+  while (node.nodeType !== 3 && node.lastChild) node = node.lastChild;
+  if (node.nodeType === 3) r.setStart(node, node.textContent.length), r.setEnd(node, node.textContent.length);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+function placeCaretAtStart(el) {
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(true);
+  let node = el;
+  while (node.nodeType !== 3 && node.firstChild) node = node.firstChild;
+  if (node.nodeType === 3) r.setStart(node, 0), r.setEnd(node, 0);
   const sel = window.getSelection();
   sel.removeAllRanges();
   sel.addRange(r);
@@ -1605,6 +1630,32 @@ textEditor.addEventListener("input", () => {
   }
 });
 
+// --- Auto-capitalize the first letter of a sentence while typing ---
+// autocapitalize="sentences" on the editor already handles this for mobile
+// virtual keyboards; this covers physical-keyboard typing, which that HTML
+// attribute doesn't affect.
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = range.startOffset;
+  if (offset < 1) return;
+  const ch = node.textContent[offset - 1];
+  if (!ch || ch === ch.toUpperCase() || ch !== ch.toLowerCase()) return;
+  const before = node.textContent.slice(0, offset - 1);
+  const atBlockStart = before === "" && !node.previousSibling;
+  const afterSentenceEnd = /[.!?]\s+$/.test(before);
+  if (!atBlockStart && !afterSentenceEnd) return;
+  node.textContent = before + ch.toUpperCase() + node.textContent.slice(offset);
+  const r = document.createRange();
+  r.setStart(node, offset);
+  r.setEnd(node, offset);
+  sel.removeAllRanges();
+  sel.addRange(r);
+});
+
 // --- Wikilinks: typing [[Titre]] turns into a clickable link to that note ---
 textEditor.addEventListener("input", () => {
   const sel = window.getSelection();
@@ -1711,10 +1762,29 @@ formatToolbar.addEventListener("click", (e) => {
     tableDelete();
   } else {
     document.execCommand(cmd, false, null);
+    // Chrome leaves the caret at the START of the line after wrapping it
+    // into a list (insertOrderedList/insertUnorderedList), instead of where
+    // it actually was — typing or pressing Enter right after then corrupts
+    // the list. Force it back to the end of the current item.
+    if (cmd === "insertOrderedList" || cmd === "insertUnorderedList") fixListCaret();
   }
   scheduleSave();
   updateToolbarState();
 });
+
+function fixListCaret() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  let node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType === 3) node = node.parentElement;
+  const li = node && node.closest ? node.closest("li") : null;
+  if (!li) return;
+  const r = document.createRange();
+  r.selectNodeContents(li);
+  r.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
 
 const textColorRow = document.getElementById("text-color-row");
 const TEXT_COLORS = ["#1d1d1f", "#a13d3d", "#a8752c", "#3d6b52", "#3a5a8c", "#6b4a8c"];
@@ -1959,33 +2029,102 @@ replaceAllBtn.addEventListener("click", () => {
   showToast(replaced ? `${replaced} remplacement${replaced > 1 ? "s" : ""}` : "Aucun résultat");
 });
 
-function insertChecklistItem() {
-  const sel = window.getSelection();
+function makeChecklistLi() {
   const li = document.createElement("li");
   li.className = "checklist-item";
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   const span = document.createElement("span");
-  span.style.fontWeight = "normal";
-  span.style.fontStyle = "normal";
-  span.textContent = " ";
   li.appendChild(checkbox);
   li.appendChild(span);
-  const ul = document.createElement("ul");
-  ul.appendChild(li);
-
-  if (sel.rangeCount) {
-    const range = sel.getRangeAt(0);
-    range.collapse(false);
-    range.insertNode(ul);
-    range.setStartAfter(span.firstChild || span);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  } else {
-    textEditor.appendChild(ul);
-  }
+  return li;
 }
+
+// Converts the current line into a checklist item, the same way the bullet
+// and numbered list buttons convert theirs — and, crucially, appends to the
+// checklist <ul> right above instead of always wrapping a brand new
+// single-item <ul>: every earlier version created one isolated <ul> per
+// item, so consecutive checkboxes never actually lined up (each had its own
+// list padding) and pressing Enter couldn't continue the list at all.
+function insertChecklistItem() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  const block = currentLineBlock(sel.getRangeAt(0).startContainer);
+  const prevBlock = block ? block.previousElementSibling : textEditor.lastElementChild;
+  const li = makeChecklistLi();
+  const span = li.querySelector("span");
+  if (block) span.append(...block.childNodes);
+  else span.append(...textEditor.childNodes);
+  // A plain space as placeholder gets treated specially by Chrome's
+  // whitespace handling: the very next real keystroke lands as a sibling of
+  // the span instead of inside it. A zero-width space anchors reliably.
+  if (!span.textContent) span.textContent = "​";
+  if (prevBlock && prevBlock.tagName === "UL" && prevBlock.classList.contains("checklist")) {
+    prevBlock.appendChild(li);
+    if (block) block.remove();
+  } else {
+    const ul = document.createElement("ul");
+    ul.className = "checklist";
+    ul.appendChild(li);
+    if (block) block.replaceWith(ul);
+    else textEditor.appendChild(ul);
+  }
+  placeCaretAtEnd(span);
+}
+
+// Enter inside a checklist item creates the next checkbox in the SAME <ul>
+// (splitting the text at the caret) instead of letting the browser insert a
+// plain <li> with no checkbox — that mismatch is what caused the checkbox
+// column to drift after the first item. Enter on an empty item exits the
+// checklist back to a normal paragraph, like native lists do.
+textEditor.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey) return;
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  let node = range.startContainer;
+  if (node.nodeType === 3) node = node.parentElement;
+  const li = node && node.closest ? node.closest(".checklist-item") : null;
+  if (!li) return;
+  e.preventDefault();
+  const span = li.querySelector("span");
+  if (!li.textContent.replace(/​/g, "").trim()) {
+    const p = document.createElement("p");
+    p.innerHTML = "<br>";
+    li.replaceWith(p);
+    placeCaretAtEnd(p);
+    scheduleSave();
+    return;
+  }
+  // range.startOffset is only a plain character index when startContainer is
+  // itself a text node — when the caret sits directly on the <span> (e.g.
+  // right after placeCaretAtEnd), the same number is a *child-node* index
+  // instead, and treating it as a character offset silently split the text
+  // at the wrong position. Extracting through a proper Range comparison
+  // sidesteps that distinction entirely, and keeps any inline formatting
+  // (bold, wikilinks…) inside the split-off half intact.
+  const endOfSpan = document.createRange();
+  endOfSpan.selectNodeContents(span);
+  const afterRange = range.cloneRange();
+  afterRange.setEnd(endOfSpan.endContainer, endOfSpan.endOffset);
+  const afterFragment = afterRange.extractContents();
+  const hadAfterContent = afterFragment.textContent.length > 0;
+  if (!span.textContent) span.textContent = "​";
+  const newLi = makeChecklistLi();
+  const newSpan = newLi.querySelector("span");
+  newSpan.appendChild(afterFragment);
+  if (!hadAfterContent) {
+    // A genuinely empty inline element loses the caret anchor the moment a
+    // real keystroke lands (Chrome inserts the typed text as a sibling of
+    // the span instead of inside it) — an invisible zero-width space gives
+    // native typing something to actually sit inside.
+    newSpan.appendChild(document.createTextNode("​"));
+  }
+  li.after(newLi);
+  if (hadAfterContent) placeCaretAtStart(newSpan);
+  else placeCaretAtEnd(newSpan);
+  scheduleSave();
+});
 
 function currentTable() {
   const sel = window.getSelection();
@@ -2195,6 +2334,8 @@ function setTool(tool) {
   setPressed(highlighterBtn, tool === "highlighter");
   setPressed(eraserBtn, tool === "eraser");
   renderColorRow();
+  drawWidth = toolWidths[tool];
+  updateWidthUI();
 }
 
 function renderColorRow() {
@@ -2222,12 +2363,31 @@ renderColorRow();
 penBtn.addEventListener("click", () => setTool("pen"));
 highlighterBtn.addEventListener("click", () => setTool("highlighter"));
 
-document.querySelectorAll(".width-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    drawWidth = Number(btn.dataset.width);
-    document.querySelectorAll(".width-btn").forEach((b) => setPressed(b, false));
-    setPressed(btn, true);
-  });
+// Each tool remembers its own width — a thin pen and a fat eraser don't have
+// to fight over one shared slider position — and the eraser's range starts
+// much bigger, since "not thick enough" was specifically the complaint.
+const widthSlider = document.getElementById("width-slider");
+const widthPreviewDot = document.getElementById("width-preview-dot");
+const TOOL_WIDTH_RANGE = { pen: [1, 20], highlighter: [1, 20], eraser: [6, 60] };
+let toolWidths = { pen: 3, highlighter: 3, eraser: 24 };
+
+function updateWidthUI() {
+  const tool = isErasing ? "eraser" : isHighlighting ? "highlighter" : "pen";
+  const [min, max] = TOOL_WIDTH_RANGE[tool];
+  widthSlider.min = String(min);
+  widthSlider.max = String(max);
+  widthSlider.value = String(drawWidth);
+  const dotSize = Math.min(Math.max(drawWidth, 4), 28);
+  widthPreviewDot.style.width = dotSize + "px";
+  widthPreviewDot.style.height = dotSize + "px";
+}
+updateWidthUI();
+
+widthSlider.addEventListener("input", () => {
+  drawWidth = Number(widthSlider.value);
+  const tool = isErasing ? "eraser" : isHighlighting ? "highlighter" : "pen";
+  toolWidths[tool] = drawWidth;
+  updateWidthUI();
 });
 
 eraserBtn.addEventListener("click", () => {
@@ -2305,9 +2465,28 @@ canvas.addEventListener("pointermove", (e) => {
   ctx.restore();
 });
 
+// A real highlighter follows the line, not the wobble of a hand-drawn
+// stroke: once the stroke is finished, flatten it to a single straight
+// horizontal bar at its average height, spanning from the first point
+// reached to the last — however many words it was dragged across.
+function snapHighlightStroke(stroke) {
+  if (!stroke.highlight || stroke.points.length < 2) return;
+  const avgY = stroke.points.reduce((sum, p) => sum + p.y, 0) / stroke.points.length;
+  const xs = stroke.points.map((p) => p.x);
+  stroke.points = [
+    { x: Math.min(...xs), y: avgY },
+    { x: Math.max(...xs), y: avgY },
+  ];
+}
+
 function endStroke() {
   if (!activeStroke) return;
+  const stroke = activeStroke;
   activeStroke = null;
+  if (stroke.highlight) {
+    snapHighlightStroke(stroke);
+    redrawStrokes();
+  }
   scheduleSave();
 }
 canvas.addEventListener("pointerup", endStroke);
