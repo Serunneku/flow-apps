@@ -1366,6 +1366,9 @@ function newNoteObject() {
     pinCode: null,
     pinSalt: null,
     encBlob: null,
+    bioCredentialId: null,
+    bioSalt: null,
+    bioWrappedKey: null,
     reminderAt: null,
     expiresAt: null,
     reminderFired: false,
@@ -2061,6 +2064,8 @@ const lockInput = document.getElementById("lock-input");
 const lockError = document.getElementById("lock-error");
 const lockUnlockBtn = document.getElementById("lock-unlock-btn");
 const lockCancelBtn = document.getElementById("lock-cancel-btn");
+const lockBiometricBtn = document.getElementById("lock-biometric-btn");
+const biometricSetupBtn = document.getElementById("biometric-setup-btn");
 let pendingUnlockNoteId = null;
 
 function setLockIcon(locked) {
@@ -2107,6 +2112,115 @@ async function decryptString(key, enc) {
   return new TextDecoder().decode(plain);
 }
 
+// --- Biometric unlock (WebAuthn, PRF extension) — an additional way to
+// unlock a note already PIN-protected, never a replacement: the platform
+// authenticator's PRF output is used directly as the AES-GCM key material,
+// so the biometric itself never leaves the device and NoteFlow never
+// touches a private key. Falls back invisibly wherever unsupported.
+async function biometricSupported() {
+  return !!(
+    window.PublicKeyCredential &&
+    (await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false))
+  );
+}
+
+async function registerBiometricCredential() {
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: "NoteFlow" },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "noteflow-note", displayName: "Note NoteFlow" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+      extensions: { prf: { eval: { first: salt } } },
+    },
+  });
+  const prfResults = cred.getClientExtensionResults().prf;
+  if (!prfResults || !prfResults.enabled || !prfResults.results) {
+    throw new Error("PRF extension not supported");
+  }
+  const key = await crypto.subtle.importKey("raw", new Uint8Array(prfResults.results.first), { name: "AES-GCM" }, false, [
+    "encrypt",
+    "decrypt",
+  ]);
+  return { credentialId: bytesToB64(new Uint8Array(cred.rawId)), salt: bytesToB64(salt), key };
+}
+
+async function getBiometricKey(credentialIdB64, saltB64) {
+  const assertion = await navigator.credentials.get({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ id: b64ToBytes(credentialIdB64), type: "public-key" }],
+      userVerification: "required",
+      extensions: { prf: { eval: { first: b64ToBytes(saltB64) } } },
+    },
+  });
+  const prfResults = assertion.getClientExtensionResults().prf;
+  if (!prfResults || !prfResults.results) throw new Error("PRF result missing");
+  return crypto.subtle.importKey("raw", new Uint8Array(prfResults.results.first), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+// Biometric auth never gets its own copy of the note's content to encrypt —
+// that would silently go stale the moment the note is edited through a PIN
+// session and only the PIN-side ciphertext gets refreshed. Instead the
+// bio-derived key WRAPS (encrypts) the exact PIN-derived key bytes, so both
+// unlock paths always decrypt the one and only `encBlob`, in sync by
+// construction rather than by discipline.
+biometricSetupBtn.addEventListener("click", async () => {
+  if (!currentNote.locked || !currentNote.pinSalt || !currentNote.encBlob) {
+    showToast("Verrouille d'abord la note avec un code PIN");
+    return;
+  }
+  if (!(await biometricSupported())) {
+    showToast("Déverrouillage biométrique non disponible sur cet appareil");
+    return;
+  }
+  const pin = window.prompt("Confirme le code PIN de cette note pour activer Face ID / empreinte :");
+  if (!pin) return;
+  try {
+    const saltBytes = b64ToBytes(currentNote.pinSalt);
+    const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+    const rawBits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: saltBytes, iterations: 150000, hash: "SHA-256" }, baseKey, 256);
+    const testKey = await crypto.subtle.importKey("raw", rawBits, { name: "AES-GCM" }, false, ["decrypt"]);
+    await decryptString(testKey, currentNote.encBlob); // throws on a wrong PIN, before anything is registered
+    const { credentialId, salt, key: bioKey } = await registerBiometricCredential();
+    const wrapped = await encryptString(bioKey, bytesToB64(new Uint8Array(rawBits)));
+    currentNote.bioCredentialId = credentialId;
+    currentNote.bioSalt = salt;
+    currentNote.bioWrappedKey = wrapped;
+    await persistNote(currentNote);
+    showToast("Déverrouillage biométrique activé pour cette note");
+  } catch {
+    showToast("Code incorrect ou déverrouillage biométrique impossible");
+  }
+});
+
+lockBiometricBtn.addEventListener("click", async () => {
+  const note = notes.find((n) => n.id === pendingUnlockNoteId);
+  if (!note || !note.bioCredentialId) return;
+  try {
+    const bioKey = await getBiometricKey(note.bioCredentialId, note.bioSalt);
+    const rawKeyB64 = await decryptString(bioKey, note.bioWrappedKey);
+    const pinKey = await crypto.subtle.importKey("raw", b64ToBytes(rawKeyB64), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    const plainBlob = JSON.parse(await decryptString(pinKey, note.encBlob));
+    lockFailCount = 0;
+    activeUnlockKey = { noteId: note.id, key: pinKey };
+    note.html = plainBlob.html || "";
+    note.drawing = plainBlob.drawing || null;
+    note.history = plainBlob.history || [];
+    await persistNote(note);
+    lockOverlay.classList.add("hidden");
+    currentNote = note;
+    if (navigator.vibrate) navigator.vibrate(15);
+    loadNoteIntoEditor();
+    showEditor();
+  } catch {
+    lockError.textContent = "Échec de la vérification biométrique";
+    lockError.classList.remove("hidden");
+  }
+});
+
 // Holds the AES key for the note currently unlocked in this session, so edits
 // keep re-encrypting on save without re-prompting for the PIN. Cleared as soon
 // as the note is no longer the open one (see showList()), so leaving the
@@ -2120,6 +2234,7 @@ function showLockOverlay() {
   lockInput.value = "";
   lockError.classList.add("hidden");
   lockOverlay.classList.remove("hidden");
+  lockBiometricBtn.classList.toggle("hidden", !currentNote.bioCredentialId);
   setTimeout(() => lockInput.focus(), 50);
 }
 
@@ -2200,6 +2315,11 @@ lockBtn.addEventListener("click", async () => {
     const key = await deriveKey(pin, salt);
     currentNote.pinSalt = bytesToB64(salt);
     currentNote.pinCode = null;
+    // A new PIN means a new key — any biometric wrap of the previous one is
+    // now stale and would silently fail; the user re-activates it if wanted.
+    currentNote.bioCredentialId = null;
+    currentNote.bioSalt = null;
+    currentNote.bioWrappedKey = null;
     currentNote.locked = true;
     activeUnlockKey = { noteId: currentNote.id, key };
     await persistNote(currentNote);
@@ -2235,6 +2355,9 @@ lockBtn.addEventListener("click", async () => {
     currentNote.pinSalt = null;
     currentNote.pinCode = null;
     currentNote.encBlob = null;
+    currentNote.bioCredentialId = null;
+    currentNote.bioSalt = null;
+    currentNote.bioWrappedKey = null;
     currentNote.html = plainBlob.html || "";
     currentNote.drawing = plainBlob.drawing || null;
     currentNote.history = plainBlob.history || [];
