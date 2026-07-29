@@ -1346,6 +1346,18 @@ textEditor.addEventListener("input", () => {
   updateWordCount();
 });
 
+let lastKeystrokeTime = 0;
+let typingFastTimer = null;
+textEditor.addEventListener("input", () => {
+  const now = performance.now();
+  if (now - lastKeystrokeTime < 250) {
+    textEditor.classList.add("typing-fast");
+    clearTimeout(typingFastTimer);
+    typingFastTimer = setTimeout(() => textEditor.classList.remove("typing-fast"), 400);
+  }
+  lastKeystrokeTime = now;
+});
+
 // --- Mode switch (unified page: text vs draw) ---
 const notePage = document.getElementById("note-page");
 const modeTextBtn = document.getElementById("mode-text-btn");
@@ -1353,6 +1365,38 @@ const modeDrawBtn = document.getElementById("mode-draw-btn");
 const drawToolbar = document.getElementById("draw-toolbar");
 const growPageBtn = document.getElementById("grow-page-btn");
 const pageFolioEl = document.getElementById("page-folio");
+
+// Easter egg: triple-tap the bottom-right corner of an empty note to fold
+// it back like a dog-eared page, revealing a short quote about writing.
+const cornerFold = document.getElementById("corner-fold");
+const WRITING_QUOTES = [
+  "« Il n'y a rien à écrire. Il n'y a qu'à s'asseoir devant une machine à écrire et saigner. » — attribué à Hemingway",
+  "« Une page blanche est un champ de bataille. » — Eugène Delacroix",
+  "« J'écris pour découvrir ce que je pense. » — Joan Didion",
+  "« Le premier jet de tout est mauvais. » — attribué à Hemingway",
+  "« Écrire, c'est réécrire. » — proverbe d'atelier",
+];
+let cornerTapTimes = [];
+let writingQuoteEl = null;
+cornerFold.addEventListener("click", () => {
+  if (textEditor.textContent.trim()) return;
+  const now = Date.now();
+  cornerTapTimes = cornerTapTimes.filter((t) => now - t < 700);
+  cornerTapTimes.push(now);
+  if (cornerTapTimes.length < 3) return;
+  cornerTapTimes = [];
+  const quote = WRITING_QUOTES[Math.floor(Math.random() * WRITING_QUOTES.length)];
+  if (!writingQuoteEl) {
+    writingQuoteEl = document.createElement("div");
+    writingQuoteEl.className = "writing-quote";
+    notePage.appendChild(writingQuoteEl);
+  }
+  writingQuoteEl.textContent = quote;
+  writingQuoteEl.classList.remove("show");
+  void writingQuoteEl.offsetWidth;
+  writingQuoteEl.classList.add("show");
+  setTimeout(() => writingQuoteEl.classList.remove("show"), 2000);
+});
 
 // Purely decorative folio number, like a bound book — only appears once the
 // page has actually been grown at least once via "+ Agrandir la page".
@@ -1382,7 +1426,23 @@ const focusBtn = document.getElementById("focus-btn");
 focusBtn.addEventListener("click", () => {
   const entering = editorScreen.classList.toggle("focus-mode");
   if (entering) startAmbientFocusSound();
-  else stopAmbientFocusSound();
+  else {
+    stopAmbientFocusSound();
+    notePage.style.removeProperty("--grain-x");
+    notePage.style.removeProperty("--grain-y");
+  }
+});
+
+// The paper grain drifts a couple pixels against the cursor in focus mode —
+// like a sheet of paper on a desk, viewed from a slightly shifting angle.
+const reduceMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+document.addEventListener("mousemove", (e) => {
+  if (!editorScreen.classList.contains("focus-mode") || reduceMotionQuery.matches) return;
+  const rect = notePage.getBoundingClientRect();
+  const relX = (e.clientX - rect.left) / rect.width - 0.5;
+  const relY = (e.clientY - rect.top) / rect.height - 0.5;
+  notePage.style.setProperty("--grain-x", `${(-relX * 4).toFixed(2)}px`);
+  notePage.style.setProperty("--grain-y", `${(-relY * 4).toFixed(2)}px`);
 });
 
 // --- PIN lock ---

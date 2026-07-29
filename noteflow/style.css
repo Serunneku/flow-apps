@@ -1410,9 +1410,10 @@ select option {
      re-samples/snaps to a different pixel during the page-turn or
      cover-flip transforms — it stays visually the same texture throughout
      the animation instead of appearing to "jump" at the last frame. */
-  background-position: 0 0;
+  background-position: var(--grain-x, 0) var(--grain-y, 0);
   background-repeat: repeat;
   backface-visibility: hidden;
+  transition: background-position 0.3s var(--ease);
 }
 
 .note-page::after {
@@ -1491,6 +1492,15 @@ select option {
   font-size: 15px;
   line-height: 1.65;
   outline: none;
+  caret-color: var(--paper-gold-ink);
+  transition: caret-color 0.25s var(--ease);
+}
+
+/* The caret brightens while typing at a fast cadence, like a fountain-pen
+   nib following the hand — the closest a browser lets a native caret get to
+   "reacting" to input, since its width/shape aren't stylable. */
+.text-editor.typing-fast {
+  caret-color: var(--gold);
 }
 
 .note-page.mode-draw .text-editor {
@@ -1675,6 +1685,39 @@ select option {
     border: none !important;
     overflow: visible !important;
   }
+}
+
+.corner-fold {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 70px;
+  height: 70px;
+  z-index: 2;
+}
+
+.writing-quote {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px;
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--paper-gold-ink);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s var(--ease);
+}
+
+.writing-quote.show {
+  opacity: 1;
 }
 
 .page-folio {
