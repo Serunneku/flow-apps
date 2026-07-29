@@ -1032,6 +1032,7 @@ NOTE_COLORS.forEach((c) => {
     notePage.style.backgroundColor = c.key || "";
     updateNoteColorSelection();
     scheduleSave();
+    colorPanel.classList.add("hidden");
   });
   noteColorRow.appendChild(swatch);
 });
@@ -1066,6 +1067,7 @@ PAPER_STYLES.forEach((p) => {
     notePage.dataset.paper = p.key;
     updatePaperStyleSelection();
     scheduleSave();
+    paperPanel.classList.add("hidden");
   });
   paperStyleRow.appendChild(btn);
 });
@@ -1383,6 +1385,7 @@ reminderClearBtn.addEventListener("click", () => {
   currentNote.reminderFired = false;
   reminderInput.value = "";
   scheduleSave();
+  reminderPanel.classList.add("hidden");
   showToast("Rappel supprimé");
 });
 
@@ -1625,6 +1628,32 @@ textEditor.addEventListener("input", () => {
   } catch {
     /* selection edge case: skip silently */
   }
+});
+
+// --- Auto-capitalize the first letter of a sentence while typing ---
+// autocapitalize="sentences" on the editor already handles this for mobile
+// virtual keyboards; this covers physical-keyboard typing, which that HTML
+// attribute doesn't affect.
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = range.startOffset;
+  if (offset < 1) return;
+  const ch = node.textContent[offset - 1];
+  if (!ch || ch === ch.toUpperCase() || ch !== ch.toLowerCase()) return;
+  const before = node.textContent.slice(0, offset - 1);
+  const atBlockStart = before === "" && !node.previousSibling;
+  const afterSentenceEnd = /[.!?]\s+$/.test(before);
+  if (!atBlockStart && !afterSentenceEnd) return;
+  node.textContent = before + ch.toUpperCase() + node.textContent.slice(offset);
+  const r = document.createRange();
+  r.setStart(node, offset);
+  r.setEnd(node, offset);
+  sel.removeAllRanges();
+  sel.addRange(r);
 });
 
 // --- Wikilinks: typing [[Titre]] turns into a clickable link to that note ---
