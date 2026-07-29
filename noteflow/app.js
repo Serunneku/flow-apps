@@ -4221,6 +4221,34 @@ cmdkInput.addEventListener("keydown", (e) => {
   }
 });
 
+// --- Réception de partage entrant (Web Share Target API) ---
+// D'autres apps (navigateur, Notes, Photos…) peuvent "Partager vers NoteFlow" ;
+// le système ouvre alors index.html avec ces paramètres de requête (voir
+// manifest.json > share_target). On les convertit en une nouvelle note puis
+// on nettoie l'URL pour ne pas recréer la note à chaque rechargement.
+async function handleIncomingShare() {
+  const params = new URLSearchParams(window.location.search);
+  const sharedTitle = params.get("shared_title");
+  const sharedText = params.get("shared_text");
+  const sharedUrl = params.get("shared_url");
+  if (!sharedTitle && !sharedText && !sharedUrl) return;
+
+  window.history.replaceState({}, "", window.location.pathname);
+
+  const note = newNoteObject();
+  note.title = sharedTitle || "";
+  const bodyParts = [];
+  if (sharedText) bodyParts.push(`<p>${escapeHtml(sharedText)}</p>`);
+  if (sharedUrl) bodyParts.push(`<p><a href="${escapeHtml(sharedUrl)}">${escapeHtml(sharedUrl)}</a></p>`);
+  note.html = bodyParts.join("");
+  notes.unshift(note);
+  await persistNote(note);
+  currentNote = note;
+  loadNoteIntoEditor();
+  showEditor();
+  showToast("Contenu partagé ajouté à une nouvelle note");
+}
+
 // --- Init ---
 (async () => {
   try {
@@ -4232,6 +4260,7 @@ cmdkInput.addEventListener("keydown", (e) => {
     showToast("Impossible de charger tes notes locales (stockage indisponible ou navigation privée)");
   }
   showList();
+  await handleIncomingShare();
   initSyncFromStorage();
 })();
 
