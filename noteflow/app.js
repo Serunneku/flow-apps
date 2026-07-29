@@ -57,6 +57,7 @@ const PREF_KEYS = {
   sound: "noteflow.sound",
   savedSearches: "noteflow.savedSearches",
   thickInk: "noteflow.thickInk",
+  folderCovers: "noteflow.folderCovers",
 };
 const loadPref = (key, fallback) => {
   try {
@@ -441,6 +442,13 @@ let toastIsUndoable = false;
 function showToast(message, onUndo, options) {
   const { actionLabel, ctrlZ = true } = options || {};
   clearTimeout(toastTimer);
+  // toast-text already carries role="status" (an implicit ARIA live
+  // region), so every one of these warm, branded messages ("Note
+  // verrouillée et chiffrée", not "Error: locked=true") is already
+  // announced to screen readers — clearing first forces a re-announcement
+  // even when two consecutive actions produce the exact same text.
+  toastText.textContent = "";
+  void toastText.offsetWidth;
   toastText.textContent = message;
   toastUndo.textContent = actionLabel || "Annuler";
   toastUndo.classList.toggle("hidden", !onUndo);
@@ -595,6 +603,31 @@ function folderColor(folder) {
   return FOLDER_COLOR_PALETTE[Math.abs(hash) % FOLDER_COLOR_PALETTE.length];
 }
 
+// A curated, restrained set of "cover" gradients a folder can be assigned to
+// on purpose — not an arbitrary color/emoji picker, closer to choosing a
+// binding cloth than tagging with a random color.
+const FOLDER_COVER_TEXTURES = [
+  "linear-gradient(135deg, #8a5f18, #b08600)",
+  "linear-gradient(135deg, #0072B2, #4A5FA5)",
+  "linear-gradient(135deg, #009E73, #2E7D6B)",
+  "linear-gradient(135deg, #D55E00, #946A3D)",
+  "linear-gradient(135deg, #5B4FA0, #7A4B8A)",
+  "linear-gradient(135deg, #3A6B8C, #4A5FA5)",
+];
+
+function loadFolderCovers() {
+  return loadPref(PREF_KEYS.folderCovers, {});
+}
+function saveFolderCovers(map) {
+  savePref(PREF_KEYS.folderCovers, map);
+}
+
+function folderDisplayColor(folder) {
+  const covers = loadFolderCovers();
+  const idx = covers[folder];
+  return idx !== undefined ? FOLDER_COVER_TEXTURES[idx] : folderColor(folder);
+}
+
 function allFolders() {
   return [...new Set(notes.map((n) => n.folder).filter(Boolean))];
 }
@@ -708,11 +741,32 @@ function renderFolderFilters() {
     // up on a shelf by how full they are.
     const noteCount = notes.filter((n) => !n.deletedAt && (n.folder === folder || (n.folder || "").startsWith(folder + "/"))).length;
     chip.style.borderLeftWidth = `${Math.min(2 + Math.round(noteCount / 2), 8)}px`;
-    chip.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
     chip.title = folder;
+    const labelSpan = document.createElement("span");
+    labelSpan.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
+    const coverSwatch = document.createElement("span");
+    coverSwatch.className = "folder-cover-swatch";
+    coverSwatch.style.background = folderDisplayColor(folder);
+    coverSwatch.title = "Choisir une couverture pour ce dossier";
+    coverSwatch.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const covers = loadFolderCovers();
+      const current = covers[folder] ?? -1;
+      covers[folder] = (current + 1) % FOLDER_COVER_TEXTURES.length;
+      saveFolderCovers(covers);
+      renderFolderFilters();
+    });
+    chip.appendChild(labelSpan);
+    chip.appendChild(coverSwatch);
     chip.addEventListener("click", () => {
       activeFolderFilter = activeFolderFilter === folder ? null : folder;
       renderList();
+      // A brief "cover flip" on the list itself when entering/leaving a
+      // folder — distinct from the note page-turn, since this is opening a
+      // folder's cover rather than a single page.
+      notesListEl.classList.remove("folder-flip");
+      void notesListEl.offsetWidth;
+      notesListEl.classList.add("folder-flip");
     });
     chip.addEventListener("dragover", (e) => e.preventDefault());
     chip.addEventListener("drop", (e) => {
@@ -949,7 +1003,7 @@ function renderList() {
     if (note.folder) {
       const chip = document.createElement("span");
       chip.className = "note-folder-chip";
-      chip.style.background = folderColor(note.folder);
+      chip.style.background = folderDisplayColor(note.folder);
       chip.textContent = note.folder;
       li.querySelector(".note-meta").appendChild(chip);
     }

@@ -897,6 +897,17 @@ button {
   transition: border-color 0.15s var(--ease), color 0.15s var(--ease), background-color 0.15s var(--ease);
 }
 
+.folder-cover-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
 .folder-chip {
   border-left-color: var(--gold);
   border-left-style: solid;
@@ -918,6 +929,23 @@ button {
   gap: 10px;
   flex: 1;
   overflow-y: auto;
+  perspective: 1200px;
+}
+
+@keyframes folderFlip {
+  from { transform: rotateX(-6deg); opacity: 0.6; }
+  to { transform: rotateX(0deg); opacity: 1; }
+}
+
+.notes-list.folder-flip {
+  animation: folderFlip 0.35s var(--ease);
+  transform-origin: top center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notes-list.folder-flip {
+    animation: none;
+  }
 }
 
 .note-item {
