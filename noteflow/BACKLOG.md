@@ -108,3 +108,87 @@ angle :
 - Espaces de travail cloisonnés / profils multi-carnets — refonte architecturale,
   pas du polish d'organisation ; à revisiter seulement si un vrai besoin de
   cloisonnement strict émerge.
+
+## Round 3 — Patrick × Théa (débat)
+
+Patrick a proposé 15 VRAIES nouveautés (capacités absentes, pas des
+améliorations). L'utilisateur voulait exactement 10 nouveautés finales.
+Théa a tranché idée par idée : 6 gardées, 9 rejetées, remplacées par 4 des
+siennes pour arriver pile à 10.
+
+**Gardées parmi les 15 de Patrick (6)**
+1. **Notes vocales intégrées (MediaRecorder)** — 100% local (Blob en
+   IndexedDB), aucun serveur requis.
+2. **OCR photo → texte** — moteur OCR embarqué en wasm côté client, pas
+   d'appel réseau.
+3. **Extraction automatique de tâches depuis le texte libre** — heuristique
+   locale, aucune donnée ne sort de l'appareil.
+4. **Notes éphémères à durée de vie (auto-destruction)** — capacité neuve,
+   zéro dépendance serveur, en plus juste pour la marque (la lettre qui
+   s'efface).
+5. **Scan de code-barres/QR vers note** — lecture caméra locale (lib type
+   jsQR), capture une référence physique dans le carnet.
+6. **Import depuis calendrier/contacts** — recadré en import de fichiers
+   standards (.ics/.vcf) déposés par l'utilisateur, pas une synchronisation
+   live avec l'OS (permissions natives hors scope PWA).
+
+**Rejetées parmi les 15 de Patrick (9)** — motif principal : supposent un
+vrai backend propriétaire, une dépendance cloud non déclarée, un virage
+"app IA générique", ou un gadget-capteur hors ton :
+- Dictée vocale continue (Web Speech API) — redondante avec les notes
+  vocales, et route l'audio vers un serveur de reconnaissance cloud (Chrome).
+- Géolocalisation de note + vue "notes prises ici" — gadget-capteur, hors
+  ton de marque.
+- Capture web via URL (façon Pocket/Instapaper) — récupérer une URL
+  distante exige un scraper serveur (CORS) : backend propriétaire déguisé.
+- Chiffrement de bout en bout vers un contact — un vrai E2E suppose un
+  relais de clés serveur, incompatible avec "sans backend propriétaire".
+- Espace collaboratif temps réel (CRDT, curseurs live) — exige un serveur
+  de synchronisation permanent, et change la nature du produit (rituel
+  solitaire → outil d'équipe), hors positionnement.
+- Requêtes en langage naturel façon assistant IA — nécessite un LLM cloud,
+  ferait basculer NoteFlow en "app IA générique".
+- Publication d'une note en page web publique — "publier" suppose un
+  hébergement géré par nous, hors scope sans backend propriétaire.
+- Capteur d'activité physique (pas/mouvement) lié aux notes — pur
+  gadget-capteur, aucun lien avec l'écriture.
+- Widget d'écran d'accueil natif — un vrai widget natif exige une coquille
+  native (Android/iOS), hors périmètre "PWA vanilla JS" — limite technique,
+  pas produit.
+
+**Ajoutées par Théa en remplacement (4)** — reformulent l'intention de
+certaines idées rejetées de façon compatible local-first :
+7. **Déverrouillage biométrique (WebAuthn / Touch ID, Face ID, empreinte)**
+   — corrigé après relecture : le chiffrement réel du contenu verrouillé
+   existe déjà (AES-GCM/PBKDF2, voir app.js) et n'est donc pas une
+   nouveauté. La vraie capacité absente est la MÉTHODE de déverrouillage
+   elle-même : aujourd'hui, seul un code PIN tapé au clavier existe. Le
+   Credential Management API / WebAuthn permettrait de déverrouiller une
+   note via l'authentificateur biométrique de l'appareil, sans serveur
+   (les clés restent locales à l'appareil).
+8. **Partage chiffré par mot de passe** — génère un fichier `.noteflow`
+   chiffré (mot de passe choisi par l'utilisateur), envoyé par le canal de
+   son choix (mail, message) ; remplace honnêtement l'E2E vers un contact
+   sans relais serveur.
+9. **Export en page web autonome** — un unique fichier HTML auto-suffisant
+   (note + style + grain de papier inline) que l'utilisateur héberge où il
+   veut ; remplace la "publication" sans que NoteFlow devienne un
+   hébergeur.
+10. **Réception de partage entrant (Web Share Target API)** — NoteFlow
+    apparaît dans le menu "Partager" du système, reçoit texte/URL/sélection
+    depuis n'importe quelle app sans jamais aller chercher de contenu
+    distant lui-même ; remplace la capture façon Pocket sans scraping
+    serveur.
+
+**Résultat final (10 nouveautés retenues)** : Notes vocales · OCR
+photo→texte · Scan QR/code-barres · Réception de partage entrant (Web
+Share Target) · Extraction automatique de tâches · Notes éphémères à durée
+de vie · Import .ics/.vcf · Déverrouillage biométrique (WebAuthn) ·
+Partage chiffré par mot de passe · Export en page web autonome.
+
+Fil conducteur du filtrage : toute capacité qui suppose un serveur
+permanent (relais de clés, sync temps réel, LLM cloud, scraping,
+hébergement, coquille native) est rejetée ou reformulée en version que
+l'utilisateur héberge/transporte lui-même — cohérent avec "sync Firebase
+optionnelle où l'utilisateur fournit sa propre config", jamais un backend
+que NoteFlow opérerait pour lui.
