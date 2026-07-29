@@ -1000,6 +1000,14 @@ function renderList() {
         new Date(note.reminderAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
       li.querySelector(".note-meta").appendChild(rem);
     }
+    if (note.expiresAt && note.expiresAt > Date.now()) {
+      const eph = document.createElement("span");
+      eph.className = "note-reminder-chip";
+      eph.innerHTML =
+        '<svg class="icon"><use href="#icon-clock"/></svg> s\'efface ' +
+        new Date(note.expiresAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      li.querySelector(".note-meta").appendChild(eph);
+    }
     if (note.folder) {
       const chip = document.createElement("span");
       chip.className = "note-folder-chip";
@@ -1241,6 +1249,7 @@ function newNoteObject() {
     pinSalt: null,
     encBlob: null,
     reminderAt: null,
+    expiresAt: null,
     reminderFired: false,
     history: [],
     color: null,
@@ -1318,6 +1327,7 @@ function loadNoteIntoEditor() {
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
   backlinksPanel.classList.add("hidden");
+  ephemeralPanel.classList.add("hidden");
   colorPanel.classList.add("hidden");
   paperPanel.classList.add("hidden");
   findPanel.classList.add("hidden");
@@ -2017,6 +2027,49 @@ setInterval(() => {
       if (listScreen.classList.contains("active")) renderList();
     }
   });
+}, 30000);
+
+// --- Ephemeral notes: a self-destruct timer, distinct from reminders — the
+// note quietly moves itself to the trash once the delay is up (the 30-day
+// trash retention still applies, so it's never truly unrecoverable). ---
+const ephemeralBtn = document.getElementById("ephemeral-btn");
+const ephemeralPanel = document.getElementById("ephemeral-panel");
+const ephemeralClearBtn = document.getElementById("ephemeral-clear-btn");
+
+ephemeralBtn.addEventListener("click", () => {
+  reminderPanel.classList.add("hidden");
+  historyPanel.classList.add("hidden");
+  ephemeralPanel.classList.toggle("hidden");
+});
+
+document.getElementById("ephemeral-quick-row").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-hours]");
+  if (!btn) return;
+  const hours = Number(btn.dataset.hours);
+  currentNote.expiresAt = Date.now() + hours * 3600000;
+  scheduleSave();
+  ephemeralPanel.classList.add("hidden");
+  showToast(`Cette note s'effacera dans ${btn.textContent}`);
+});
+
+ephemeralClearBtn.addEventListener("click", () => {
+  currentNote.expiresAt = null;
+  scheduleSave();
+  ephemeralPanel.classList.add("hidden");
+  showToast("Expiration annulée");
+});
+
+setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+  notes.forEach((note) => {
+    if (note.expiresAt && !note.deletedAt && note.expiresAt <= now) {
+      note.deletedAt = now;
+      persistNote(note);
+      changed = true;
+    }
+  });
+  if (changed && listScreen.classList.contains("active")) renderList();
 }, 30000);
 
 // --- Version history ---
@@ -3419,7 +3472,7 @@ document.addEventListener("keydown", (e) => {
       lockCancelBtn.click();
       return;
     }
-    [reminderPanel, historyPanel, backlinksPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
+    [reminderPanel, historyPanel, backlinksPanel, ephemeralPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
   }
 
   const mod = e.metaKey || e.ctrlKey;
