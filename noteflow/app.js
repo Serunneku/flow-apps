@@ -2334,6 +2334,8 @@ function setTool(tool) {
   setPressed(highlighterBtn, tool === "highlighter");
   setPressed(eraserBtn, tool === "eraser");
   renderColorRow();
+  drawWidth = toolWidths[tool];
+  updateWidthUI();
 }
 
 function renderColorRow() {
@@ -2361,12 +2363,31 @@ renderColorRow();
 penBtn.addEventListener("click", () => setTool("pen"));
 highlighterBtn.addEventListener("click", () => setTool("highlighter"));
 
-document.querySelectorAll(".width-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    drawWidth = Number(btn.dataset.width);
-    document.querySelectorAll(".width-btn").forEach((b) => setPressed(b, false));
-    setPressed(btn, true);
-  });
+// Each tool remembers its own width — a thin pen and a fat eraser don't have
+// to fight over one shared slider position — and the eraser's range starts
+// much bigger, since "not thick enough" was specifically the complaint.
+const widthSlider = document.getElementById("width-slider");
+const widthPreviewDot = document.getElementById("width-preview-dot");
+const TOOL_WIDTH_RANGE = { pen: [1, 20], highlighter: [1, 20], eraser: [6, 60] };
+let toolWidths = { pen: 3, highlighter: 3, eraser: 24 };
+
+function updateWidthUI() {
+  const tool = isErasing ? "eraser" : isHighlighting ? "highlighter" : "pen";
+  const [min, max] = TOOL_WIDTH_RANGE[tool];
+  widthSlider.min = String(min);
+  widthSlider.max = String(max);
+  widthSlider.value = String(drawWidth);
+  const dotSize = Math.min(Math.max(drawWidth, 4), 28);
+  widthPreviewDot.style.width = dotSize + "px";
+  widthPreviewDot.style.height = dotSize + "px";
+}
+updateWidthUI();
+
+widthSlider.addEventListener("input", () => {
+  drawWidth = Number(widthSlider.value);
+  const tool = isErasing ? "eraser" : isHighlighting ? "highlighter" : "pen";
+  toolWidths[tool] = drawWidth;
+  updateWidthUI();
 });
 
 eraserBtn.addEventListener("click", () => {

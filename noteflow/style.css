@@ -1309,33 +1309,27 @@ select option {
   transform: scale(1.1);
 }
 
-.width-btn {
-  border: none;
-  background: transparent;
-  border-radius: 8px;
-  cursor: pointer;
-  color: var(--muted);
-  width: 30px;
-  height: 32px;
+.width-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px;
+}
+
+.width-preview-dot {
   flex-shrink: 0;
-  transition: background-color 0.15s var(--ease), color 0.15s var(--ease), transform 0.1s var(--ease);
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  border-radius: 999px;
+  background: var(--text);
+  transition: width 0.1s var(--ease), height 0.1s var(--ease);
 }
 
-.width-btn:hover {
-  background: var(--surface);
-}
-
-.width-btn:active {
-  transform: scale(0.92);
-}
-
-.width-btn:nth-child(1) { font-size: 8px; }
-.width-btn:nth-child(2) { font-size: 12px; }
-.width-btn:nth-child(3) { font-size: 18px; }
-
-.width-btn.active {
-  background: var(--accent);
-  color: var(--accent-text);
+.width-slider {
+  width: 90px;
+  accent-color: var(--gold);
+  cursor: pointer;
 }
 
 #eraser-btn, #undo-stroke-btn, #clear-draw-btn {
