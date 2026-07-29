@@ -86,10 +86,31 @@ function applyTheme(t) {
   themeToggle.innerHTML = `<svg class="icon"><use href="#icon-${THEME_ICON[t]}"/></svg>`;
 }
 applyTheme(theme);
-themeToggle.addEventListener("click", () => {
-  theme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
-  savePref(PREF_KEYS.theme, theme);
-  applyTheme(theme);
+themeToggle.addEventListener("click", (e) => {
+  const nextTheme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
+  const commit = () => {
+    theme = nextTheme;
+    savePref(PREF_KEYS.theme, theme);
+    applyTheme(theme);
+  };
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!document.startViewTransition || reduceMotion) {
+    commit();
+    return;
+  }
+  // The theme change reveals itself as a circle expanding from the toggle
+  // button, instead of a flat cross-fade — the same "iris" pattern as
+  // Android 12/Material You's theme switch.
+  const x = e.clientX;
+  const y = e.clientY;
+  const endRadius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+  const transition = document.startViewTransition(commit);
+  transition.ready.then(() => {
+    document.documentElement.animate(
+      { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${endRadius}px at ${x}px ${y}px)`] },
+      { duration: 500, easing: "cubic-bezier(0.22, 1, 0.36, 1)", pseudoElement: "::view-transition-new(root)" }
+    );
+  });
 });
 
 // --- Daily streak (local, based on days with at least one save) ---
@@ -412,10 +433,21 @@ function timeAgo(ts) {
   return new Date(ts).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
 }
 
+// A continuous hue-from-hash (0-360°) can land two folders on hues that
+// read as the same color under deuteranopia/protanopia (e.g. a muted red
+// next to a muted green). This fixed set is built around the Okabe-Ito
+// colorblind-safe palette instead, so any two folders stay visually
+// distinguishable regardless of which two hashes collide.
+const FOLDER_COLOR_PALETTE = [
+  "#8a5f18", "#0072B2", "#009E73", "#D55E00",
+  "#5B4FA0", "#CC79A7", "#3A6B8C", "#946A3D",
+  "#2E7D6B", "#7A4B8A", "#B08600", "#4A5FA5",
+];
+
 function folderColor(folder) {
   let hash = 0;
   for (let i = 0; i < folder.length; i++) hash = folder.charCodeAt(i) + ((hash << 5) - hash);
-  return `hsl(${Math.abs(hash) % 360}, 28%, 38%)`;
+  return FOLDER_COLOR_PALETTE[Math.abs(hash) % FOLDER_COLOR_PALETTE.length];
 }
 
 function allFolders() {
@@ -732,8 +764,16 @@ function renderList() {
       const btn = e.target.closest(".note-action");
       if (!btn) return;
       const action = btn.dataset.action;
-      if (action === "delete") deleteNote(note.id);
-      else if (action === "restore") restoreNote(note.id);
+      if (action === "delete") {
+        // A crumple, not a fade — the same physical gesture as throwing a
+        // real sheet of paper away, echoing the carnet metaphor.
+        if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          deleteNote(note.id);
+        } else {
+          li.classList.add("crumple-out");
+          li.addEventListener("animationend", () => deleteNote(note.id), { once: true });
+        }
+      } else if (action === "restore") restoreNote(note.id);
       else if (action === "purge") permanentlyDeleteNote(note.id);
       else if (action === "unarchive") setNoteArchived(note.id, false);
     });

@@ -97,6 +97,12 @@
 
 * { box-sizing: border-box; }
 
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-duration: 0.01ms !important;
@@ -893,6 +899,18 @@ button {
 
 .note-item.dragging {
   opacity: 0.4;
+  transform: rotate(-2deg) scale(0.98);
+}
+
+@keyframes crumpleOut {
+  0% { transform: scale(1) rotate(0deg); opacity: 1; }
+  40% { transform: scale(0.92) rotate(-3deg) skew(-2deg); opacity: 0.85; }
+  100% { transform: scale(0.55) rotate(8deg) skew(6deg); opacity: 0; }
+}
+
+.note-item.crumple-out {
+  animation: crumpleOut 0.38s var(--ease) forwards;
+  pointer-events: none;
 }
 
 .note-item.drag-over {
@@ -1388,6 +1406,13 @@ select option {
   opacity: 0.05;
   mix-blend-mode: multiply;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  /* Pinned to an absolute origin (not "auto") so the grain never
+     re-samples/snaps to a different pixel during the page-turn or
+     cover-flip transforms — it stays visually the same texture throughout
+     the animation instead of appearing to "jump" at the last frame. */
+  background-position: 0 0;
+  background-repeat: repeat;
+  backface-visibility: hidden;
 }
 
 .note-page::after {
@@ -1781,6 +1806,33 @@ a:focus-visible,
   background: var(--accent);
   color: var(--accent-text);
   border-color: var(--accent);
+}
+
+/* A discreet gold-rimmed frame + a faint cinematic vignette at the screen
+   edges — turns "focus mode" into a spotlight-lit writing ritual rather
+   than just hiding the toolbars. */
+#editor-screen.focus-mode::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 30%, transparent);
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.07) 100%);
+  opacity: 0;
+  animation: focusFrameIn 0.5s var(--ease) forwards;
+}
+
+@keyframes focusFrameIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #editor-screen.focus-mode::after {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 /* --- Lock overlay --- */
