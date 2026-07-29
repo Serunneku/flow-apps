@@ -101,6 +101,31 @@
 
 * { box-sizing: border-box; }
 
+/* High-contrast accessibility mode, independent from light/dark — stronger
+   borders and text weight for low vision, without turning off the paper
+   grain/texture (unlike a generic "high contrast" browser mode would). */
+:root[data-thick-ink="true"] {
+  --border: color-mix(in srgb, var(--text) 45%, transparent);
+  --muted: color-mix(in srgb, var(--text) 78%, transparent);
+}
+
+:root[data-thick-ink="true"] body {
+  font-weight: 500;
+}
+
+:root[data-thick-ink="true"] .note-item,
+:root[data-thick-ink="true"] .side-panel,
+:root[data-thick-ink="true"] .menu-panel,
+:root[data-thick-ink="true"] .icon-btn,
+:root[data-thick-ink="true"] input,
+:root[data-thick-ink="true"] .custom-select-trigger {
+  border-width: 1.5px;
+}
+
+:root[data-thick-ink="true"] .text-editor a {
+  text-decoration-thickness: 2px;
+}
+
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -1817,6 +1842,21 @@ select option {
     border: none !important;
     overflow: visible !important;
   }
+}
+
+.bookmark-ribbon {
+  position: absolute;
+  top: 0;
+  right: 22px;
+  width: 16px;
+  height: calc(22px + var(--scroll-depth, 0) * 46px);
+  background: linear-gradient(180deg, var(--gold), color-mix(in srgb, var(--gold) 70%, black));
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 78%, 0 100%);
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.85;
+  transition: height 0.15s var(--ease), opacity 0.3s var(--ease);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .corner-fold {

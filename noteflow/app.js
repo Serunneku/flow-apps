@@ -56,6 +56,7 @@ const PREF_KEYS = {
   streakCount: "noteflow.streak.count",
   sound: "noteflow.sound",
   savedSearches: "noteflow.savedSearches",
+  thickInk: "noteflow.thickInk",
 };
 const loadPref = (key, fallback) => {
   try {
@@ -283,6 +284,25 @@ soundToggleBtn.addEventListener("click", () => {
   savePref(PREF_KEYS.sound, soundEnabled);
   updateSoundToggleLabel();
   if (soundEnabled) playCreateSound();
+});
+
+// --- High-contrast "thick ink" mode: a distinct accessibility mode from
+// light/dark, for low-vision users — stronger borders/text, grain kept. ---
+const contrastToggleBtn = document.getElementById("contrast-toggle-btn");
+const contrastToggleLabel = document.createTextNode("");
+contrastToggleBtn.innerHTML = '<svg class="icon"><use href="#icon-contrast"/></svg>';
+contrastToggleBtn.appendChild(contrastToggleLabel);
+let thickInkEnabled = loadPref(PREF_KEYS.thickInk, false);
+function applyThickInk() {
+  if (thickInkEnabled) document.documentElement.setAttribute("data-thick-ink", "true");
+  else document.documentElement.removeAttribute("data-thick-ink");
+  contrastToggleLabel.textContent = thickInkEnabled ? "Contraste renforcé : activé" : "Contraste renforcé : désactivé";
+}
+applyThickInk();
+contrastToggleBtn.addEventListener("click", () => {
+  thickInkEnabled = !thickInkEnabled;
+  savePref(PREF_KEYS.thickInk, thickInkEnabled);
+  applyThickInk();
 });
 
 // --- Custom dropdowns (native <select> stays as the source of truth; this
@@ -1190,6 +1210,7 @@ function updateWordCount(instant) {
   const words = text ? text.split(/\s+/).length : 0;
   const chars = text.length;
   textEditor.classList.toggle("long-note", words > 200);
+  bookmarkRibbonEl.classList.toggle("hidden", words <= 200);
   cancelAnimationFrame(wordCountAnimFrame);
   if (instant) {
     displayedWordCount = words;
@@ -1603,6 +1624,7 @@ textEditor.addEventListener("input", () => {
 
 // --- Mode switch (unified page: text vs draw) ---
 const notePage = document.getElementById("note-page");
+const bookmarkRibbonEl = document.getElementById("bookmark-ribbon");
 const pageScrollEl = document.getElementById("page-scroll");
 pageScrollEl.addEventListener("scroll", () => {
   const max = pageScrollEl.scrollHeight - pageScrollEl.clientHeight;
