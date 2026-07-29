@@ -1606,6 +1606,67 @@ document.getElementById("export-note-btn").addEventListener("click", async () =>
   URL.revokeObjectURL(url);
 });
 
+// A single self-contained HTML file (inline CSS, no external requests) —
+// the user hosts it wherever they like; NoteFlow never becomes a publisher.
+document.getElementById("export-webpage-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour l'exporter");
+    return;
+  }
+  await flushSave(true);
+  const title = escapeHtml(currentNote.title || "Sans titre");
+  const html = `<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    margin: 0;
+    padding: 48px 20px;
+    background: #f0e9dc;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+  }
+  .page {
+    max-width: 640px;
+    width: 100%;
+    background: #fffdf8;
+    color: #17140f;
+    border-radius: 16px;
+    padding: 40px 36px;
+    box-shadow: 0 1px 3px rgba(23,20,15,0.07), 3px 18px 40px rgba(23,20,15,0.11);
+    line-height: 1.65;
+  }
+  h1 { font-size: 26px; margin: 0 0 20px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 1.2em 0 0.5em; }
+  a { color: #8a5f18; }
+  img { max-width: 100%; border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  td { border: 1px solid rgba(23,20,15,0.15); padding: 6px 10px; }
+  .footer { margin-top: 32px; font-size: 12px; color: #6e6656; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <h1>${title}</h1>
+    ${currentNote.html || "<p><em>Note vide.</em></p>"}
+    <p class="footer">Exporté depuis NoteFlow</p>
+  </div>
+</body>
+</html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(currentNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast("Page web exportée");
+});
+
 newNoteBtn.addEventListener("click", async () => {
   currentNote = newNoteObject();
   notes.unshift(currentNote);
