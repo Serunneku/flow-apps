@@ -1571,6 +1571,53 @@ document.getElementById("split-note-btn").addEventListener("click", async () => 
   );
 });
 
+// --- Automatic task extraction: scan free-text sentences for common French
+// action-triggering phrases, turn each into a real checkbox — entirely
+// local heuristic, no data ever leaves the device. ---
+const TASK_PATTERNS = [
+  /\bil faut\s+(.+)/i,
+  /\bje dois\s+(.+)/i,
+  /\bpenser à\s+(.+)/i,
+  /\bne pas oublier de\s+(.+)/i,
+  /\b(?:todo|à faire)\s*:\s*(.+)/i,
+];
+
+document.getElementById("extract-tasks-btn").addEventListener("click", () => {
+  const text = textEditor.textContent || "";
+  const sentences = text
+    .split(/(?<=[.!?\n])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const found = [];
+  sentences.forEach((s) => {
+    for (const re of TASK_PATTERNS) {
+      const m = s.match(re);
+      if (m) {
+        found.push((m[1] || s).replace(/[.!]+$/, "").trim());
+        break;
+      }
+    }
+  });
+  if (!found.length) {
+    showToast("Aucune tâche détectée dans le texte");
+    return;
+  }
+  const header = document.createElement("p");
+  header.innerHTML = "<strong>Tâches extraites :</strong>";
+  const ul = document.createElement("ul");
+  ul.className = "checklist";
+  found.forEach((task) => {
+    const li = makeChecklistLi();
+    li.querySelector("span").textContent = task;
+    ul.appendChild(li);
+  });
+  textEditor.appendChild(header);
+  textEditor.appendChild(ul);
+  scheduleSave();
+  updateWordCount();
+  showToast(`${found.length} tâche${found.length > 1 ? "s" : ""} extraite${found.length > 1 ? "s" : ""}`);
+});
+
 // --- Share / export a single note ---
 document.getElementById("share-note-btn").addEventListener("click", async () => {
   const title = titleInput.value.trim() || "Note NoteFlow";
