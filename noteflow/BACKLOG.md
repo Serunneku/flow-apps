@@ -192,3 +192,170 @@ hébergement, coquille native) est rejetée ou reformulée en version que
 l'utilisateur héberge/transporte lui-même — cohérent avec "sync Firebase
 optionnelle où l'utilisateur fournit sa propre config", jamais un backend
 que NoteFlow opérerait pour lui.
+
+## Round 4 — Théa solo (effet app premium)
+
+Round solo, sans débat. Critère unique : est-ce que ça donne l'impression
+d'utiliser une app à plus de 30 000 $ ? Aucune des 40 idées des rounds 1-3
+n'est reprise, même déguisée. Vanilla JS/CSS/HTML, zéro dépendance,
+zéro nouveau backend.
+
+1. **Easing physique unifié documenté en variable CSS** (S) — une seule
+   courbe `--ease-premium` (type `cubic-bezier(0.22,1,0.36,1)`) réutilisée
+   sur *toutes* les transitions existantes (feuillet, couverture, menus,
+   toasts) au lieu de easing par défaut du navigateur ça et là.
+   *Pourquoi 30K$* : les apps bon marché ont des animations qui "arrivent
+   d'un coup" ; la cohérence obsessionnelle d'une seule signature de
+   mouvement partout est un détail que seuls Apple/Linear soignent.
+
+2. **Délai de désactivation des boutons anti-double-clic avec micro-retour**
+   (S) — un bouton d'action destructive/critique (supprimer, exporter) se
+   désactive 400ms avec un léger assombrissement pendant l'opération réelle,
+   au lieu de rester cliquable pendant l'attente réseau/async.
+   *Pourquoi 30K$* : l'absence de double-soumission silencieuse est un
+   signal de rigueur d'ingénierie que seuls les produits matures affichent.
+
+3. **Son de "plume qui pose un point" à la création de note** (S) — un
+   clic feutré synthétisé via `AudioContext` (pas de fichier audio), très
+   bref (<80ms), désactivable, jamais avant `prefers-reduced-motion`/geste
+   utilisateur.
+   *Pourquoi 30K$* : un son propriétaire cohérent avec la marque au lieu
+   du silence générique donne une texture sensorielle qu'on associe aux
+   objets physiques haut de gamme (le clic d'un stylo Montblanc).
+
+4. **Halo de focus qui respire (pulse très lent, 3s)** sur le champ actif
+   du formulaire de verrouillage PIN (S) — au lieu d'un focus statique, un
+   `box-shadow` en respiration très lente et discrète pendant la saisie.
+   *Pourquoi 30K$* : un détail qu'on ne remarque qu'inconsciemment — la
+   différence entre "logiciel" et "objet vivant".
+
+5. **Numérotation de page façon livre relié** (S) — en bas de chaque note
+   longue (au-delà d'un seuil), un petit folio centré "12" en petites
+   capitales dorées, purement décoratif, actif seulement si la note dépasse
+   une hauteur de page.
+   *Pourquoi 30K$* : la pagination n'a aucune utilité fonctionnelle dans
+   un carnet numérique — l'ajouter quand même est un geste "on aurait pu
+   s'en passer, on ne l'a pas fait" typique du soin artisanal perçu.
+
+6. **Vibration de confirmation à deux temps sur suppression définitive**
+   (S) — `navigator.vibrate([10, 40, 10])` distinct du simple *tap* haptique
+   des autres actions, pour marquer que ce geste-là est irréversible.
+   *Pourquoi 30K$* : un vocabulaire haptique différencié par gravité
+   d'action (au lieu d'un buzz générique unique) est un raffinement que
+   seules les apps avec un budget de test UX dédié se paient.
+
+7. **Effet de "poids" sur le drag d'une note** (S) — la carte glissée
+   s'incline légèrement (2-3°) selon la vélocité du curseur pendant le
+   drag, comme une feuille de papier réelle qu'on déplace trop vite.
+   *Pourquoi 30K$* : c'est la même micro-physique que les listes iOS
+   (l'inclinaison suit la vitesse), un des détails les plus copiés et les
+   moins souvent bien exécutés du marché.
+
+8. **Grain de papier qui suit le curseur (parallaxe subtile, 2px max)** (M)
+   — la texture de fond de la page bouge très légèrement en contre-sens du
+   curseur en mode focus, comme une feuille posée sur une table qu'on
+   regarde sous un léger angle.
+   *Pourquoi 30K$* : la parallaxe de fond est un effet réservé aux
+   showcases Awwwards/produits Apple — extrêmement rare dans une app de
+   productivité, et jamais dans une PWA vanilla JS.
+
+9. **Transition de thème en "iris" partant du bouton cliqué** (M) — le
+   changement clair/sombre/auto part en cercle depuis le bouton de theme
+   toggle (`clip-path` circulaire animé) plutôt qu'un simple fondu global.
+   *Pourquoi 30K$* : c'est littéralement l'effet qu'Android 12/Material
+   You et quelques flagship apps ont rendu culte — jamais vu en PWA
+   artisanale, contraste fort avec le reste du marché indé.
+
+10. **Compteur de mots qui s'anime en "odomètre"** (S) — le nombre de mots
+    en bas d'éditeur défile chiffre par chiffre (comme un compteur
+    kilométrique) au lieu de sauter directement à la nouvelle valeur.
+    *Pourquoi 30K$* : Apple (App Store, Wallet) et Linear utilisent cet
+    effet précisément parce qu'il coûte cher à bien régler (timing par
+    chiffre) — signal immédiat de budget design.
+
+11. **Ombre portée qui suit l'angle de lumière du thème** (S) — en clair,
+    l'ombre des cartes/panneaux pointe légèrement vers le bas-droit
+    (lumière zénithale) ; en sombre, ombre quasi plate + léger liseré
+    doré au lieu d'ombre noire, cohérent avec une "source de lumière"
+    pensée plutôt que des ombres CSS par défaut.
+    *Pourquoi 30K$* : la cohérence d'une direction de lumière unique dans
+    tout un système d'ombres est un exercice de direction artistique que
+    la plupart des apps ne font jamais.
+
+12. **Micro-vignettage au focus mode (assombrissement des bords d'écran)**
+    (S) — en entrant en mode focus, un léger vignettage radial (5-8%
+    d'opacité) apparaît sur les bords de l'écran en plus du cadre doré
+    existant, comme un projecteur de théâtre.
+    *Pourquoi 30K$* : le vignettage cinématographique est un vocabulaire
+    visuel de film/photo haut de gamme, rarement transposé à une UI
+    d'app, et jamais dans un outil de notes.
+
+13. **Curseur de texte qui s'étire légèrement pendant la frappe rapide**
+    (S) — le caret (déjà personnalisé avec halo doré, round 2 idée 16)
+    s'étire de quelques pixels en hauteur/opacité selon la cadence de
+    frappe récente, comme un fil d'encre qui suit la main.
+    *Pourquoi 30K$* : un curseur "vivant" qui réagit au rythme de frappe
+    est le genre de détail que seuls les éditeurs de code haut de gamme
+    (Zed) ou les claviers premium travaillent.
+
+14. **Son distinct et très bref pour "sauvegardé" vs "erreur"** (S) —
+    deux signatures sonores synthétisées différentes (accord ascendant
+    discret / note grave courte) pour succès et échec de sauvegarde,
+    jamais simultanées avec le retour visuel, purement redondantes pour
+    le confort.
+    *Pourquoi 30K$* : un langage sonore de statut cohérent (comme macOS)
+    au lieu du silence ou d'un bip système générique.
+
+15. **Alignement au pixel près du grain de papier entre les deux volets**
+    (liste/éditeur) (S) — la texture de grain est calée sur une origine
+    de coordonnées commune (`background-attachment` fixe par rapport au
+    viewport) pour ne jamais "sauter" visuellement à la transition
+    feuillet/couverture.
+    *Pourquoi 30K$* : c'est un détail invisible tant qu'il est raté, et
+    seulement remarqué en creux — la continuité parfaite d'une texture à
+    travers une animation est un signe de relecture qualité poussée.
+
+16. **Easter egg discret : geste "plier un coin" révèle une citation
+    d'auteur sur l'écriture** (M) — un triple-tap sur le coin bas-droit
+    d'une note vide révèle brièvement (2s) une citation courte sur
+    l'écriture (Hemingway, Woolf...) en fondu, jamais répétitive (pool
+    tournant), purement ludique.
+    *Pourquoi 30K$* : les easter eggs soignés (Things 3, Craft) signalent
+    qu'une équipe a du temps/budget pour du superflu assumé — signe
+    classique de produit qui n'est pas sous pression de shipping permanent.
+
+17. **Transition de suppression "page qui se froisse" au lieu d'un simple
+    fade** (M) — quand une note part en corbeille depuis la liste, la
+    carte se froisse légèrement (`transform: scale + skew` sur un court
+    keyframe) avant de disparaître, écho visuel du geste physique de
+    froisser un papier qu'on jette.
+    *Pourquoi 30K$* : remplacer une suppression "générique" (fade/slide)
+    par une métaphore physique cohérente avec la marque carnet est le
+    genre de raffinement qu'on ne voit jamais dans les todo-apps low-cost.
+
+18. **Bruit de fond ultra-subtil en mode focus (silence actif, pas
+    musique)** (M) — option désactivable par défaut : un souffle d'air
+    quasi inaudible en boucle (bruit blanc filtré très bas volume, généré
+    via `AudioContext`, pas de fichier), pour donner une sensation de
+    pièce habitée plutôt que de silence numérique plat.
+    *Pourquoi 30K$* : le design sonore d'ambiance est un budget que
+    seules les apps de productivité premium (Endel-like, Craft) engagent
+    — jamais dans les apps de notes gratuites.
+
+19. **Précision d'horodatage au survol ("il y a 3 j" devient la date/heure
+    exacte au survol/appui long)** (S) — le texte relatif de la liste
+    (`timeAgo`) affiche la date et l'heure exactes en tooltip natif au
+    survol desktop, et en appui long sur mobile.
+    *Pourquoi 30K$* : la double densité d'information (relatif visible,
+    absolu disponible sur demande) est le pattern exact de Linear/Things —
+    jamais implémenté dans les apps qui se contentent d'un seul format.
+
+20. **Étalonnage des ombres et couleurs testé et corrigé pour le daltonisme
+    (simulateur intégré en dev, résultat figé en prod)** (M) — pas une
+    fonctionnalité visible utilisateur, mais tous les indicateurs de
+    couleur actuels (couleurs de note, chips de dossier `hsl()` générées
+    par hash) sont vérifiés a priori pour rester distinguables en
+    deutéranopie/protanopie, avec ajustement de luminosité si besoin.
+    *Pourquoi 30K$* : c'est le genre de travail invisible et coûteux en
+    temps (audit systématique, pas un simple contraste WCAG) que seules
+    les équipes avec un vrai budget qualité font sans qu'on le demande.
