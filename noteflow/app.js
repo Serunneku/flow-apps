@@ -54,6 +54,7 @@ const PREF_KEYS = {
   sort: "noteflow.sort",
   streakDate: "noteflow.streak.date",
   streakCount: "noteflow.streak.count",
+  sound: "noteflow.sound",
 };
 const loadPref = (key, fallback) => {
   try {
@@ -73,6 +74,94 @@ let activeTagFilter = null;
 let listView = "active"; // "active" | "archived" | "trash"
 let selectionMode = false;
 let selectedIds = new Set();
+
+// --- Synthesized sound design (off by default — a note app should never
+// make noise without being asked to) ---
+let soundEnabled = loadPref(PREF_KEYS.sound, false);
+let audioCtx = null;
+let ambientFocusNode = null;
+
+function getAudioCtx() {
+  if (!soundEnabled) return null;
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function playTone(freq, duration, type, gainPeak) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type || "sine";
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(gainPeak ?? 0.05, ctx.currentTime + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + duration + 0.02);
+}
+
+// A very short, soft click — a pen tip touching paper — when a note is created.
+function playCreateSound() {
+  playTone(680, 0.05, "sine", 0.05);
+}
+
+// Two distinct, brief sonic signatures instead of one generic beep: a small
+// ascending interval for success, a single lower note for a failure.
+function playSaveSound() {
+  playTone(520, 0.08, "sine", 0.04);
+  setTimeout(() => playTone(780, 0.1, "sine", 0.035), 60);
+}
+
+function playErrorSound() {
+  playTone(180, 0.18, "triangle", 0.05);
+}
+
+// A near-inaudible filtered noise loop for focus mode — the feel of a room
+// that's alive rather than a flat digital silence. Opt-in, like every sound
+// here, and only ever starts from a real user gesture.
+function startAmbientFocusSound() {
+  const ctx = getAudioCtx();
+  if (!ctx || ambientFocusNode) return;
+  const bufferSize = 2 * ctx.sampleRate;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  noise.loop = true;
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 350;
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  noise.connect(filter).connect(gain).connect(ctx.destination);
+  noise.start();
+  gain.gain.linearRampToValueAtTime(0.006, ctx.currentTime + 1.2);
+  ambientFocusNode = { noise, gain };
+}
+
+function stopAmbientFocusSound() {
+  if (!ambientFocusNode) return;
+  const ctx = getAudioCtx() || audioCtx;
+  const { noise, gain } = ambientFocusNode;
+  ambientFocusNode = null;
+  if (!ctx) return;
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+  setTimeout(() => {
+    try {
+      noise.stop();
+    } catch {
+      /* already stopped */
+    }
+  }, 500);
+}
 
 // --- Theme ---
 const themeToggle = document.getElementById("theme-toggle");
@@ -179,6 +268,21 @@ document.querySelectorAll("button[title]:not([aria-label])").forEach((btn) => {
 });
 setupMenu("list-menu-btn", "list-menu");
 setupMenu("editor-menu-btn", "editor-menu");
+
+const soundToggleBtn = document.getElementById("sound-toggle-btn");
+const soundToggleLabel = document.createTextNode("");
+soundToggleBtn.innerHTML = '<svg class="icon"><use href="#icon-sound"/></svg>';
+soundToggleBtn.appendChild(soundToggleLabel);
+function updateSoundToggleLabel() {
+  soundToggleLabel.textContent = soundEnabled ? "Sons : activés" : "Sons : désactivés";
+}
+updateSoundToggleLabel();
+soundToggleBtn.addEventListener("click", () => {
+  soundEnabled = !soundEnabled;
+  savePref(PREF_KEYS.sound, soundEnabled);
+  updateSoundToggleLabel();
+  if (soundEnabled) playCreateSound();
+});
 
 // --- Custom dropdowns (native <select> stays as the source of truth; this
 // only replaces how it's presented, so all existing "change" logic keeps working) ---
@@ -332,6 +436,7 @@ function showList() {
   }
   listScreen.classList.add("active");
   editorScreen.classList.remove("active");
+  stopAmbientFocusSound();
   renderList();
 }
 
@@ -978,6 +1083,7 @@ function loadNoteIntoEditor() {
   findPanel.classList.add("hidden");
   reminderInput.value = currentNote.reminderAt ? toLocalDatetimeValue(currentNote.reminderAt) : "";
   editorScreen.classList.remove("focus-mode");
+  stopAmbientFocusSound();
   notePage.style.backgroundColor = currentNote.color || "";
   notePage.dataset.paper = currentNote.paperStyle || "blank";
   updateNoteColorSelection();
@@ -1065,6 +1171,7 @@ newNoteBtn.addEventListener("click", async () => {
   currentNote = newNoteObject();
   notes.unshift(currentNote);
   await persistNote(currentNote);
+  playCreateSound();
   loadNoteIntoEditor();
   showEditor();
   titleInput.focus();
@@ -1218,8 +1325,17 @@ async function flushSave(immediate) {
   currentNote.tags = parseTags(tagsInput.value);
   currentNote.html = newHtml;
   currentNote.updatedAt = Date.now();
-  await persistNote(currentNote);
-  if (!immediate) saveIndicator.textContent = "Enregistré";
+  try {
+    await persistNote(currentNote);
+    if (!immediate) {
+      saveIndicator.textContent = "Enregistré";
+      playSaveSound();
+    }
+  } catch (err) {
+    console.error("Échec de la sauvegarde", err);
+    saveIndicator.textContent = "Erreur";
+    playErrorSound();
+  }
 }
 
 titleInput.addEventListener("input", scheduleSave);
@@ -1264,7 +1380,9 @@ modeDrawBtn.addEventListener("click", () => setMode("draw"));
 // --- Focus mode ---
 const focusBtn = document.getElementById("focus-btn");
 focusBtn.addEventListener("click", () => {
-  editorScreen.classList.toggle("focus-mode");
+  const entering = editorScreen.classList.toggle("focus-mode");
+  if (entering) startAmbientFocusSound();
+  else stopAmbientFocusSound();
 });
 
 // --- PIN lock ---
