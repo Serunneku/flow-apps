@@ -641,6 +641,10 @@ importInput.addEventListener("change", async () => {
     } else if (name.endsWith(".vcf")) {
       const count = await importVcf(await file.text());
       showToast(`${count} note${count > 1 ? "s" : ""} importée${count > 1 ? "s" : ""} depuis les contacts`);
+    } else if (name.endsWith(".noteflow")) {
+      const packet = JSON.parse(await file.text());
+      const count = await importEncryptedPacket(packet);
+      if (count) showToast("Note déchiffrée et importée");
     } else {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -1666,6 +1670,54 @@ document.getElementById("export-webpage-btn").addEventListener("click", async ()
   URL.revokeObjectURL(url);
   showToast("Page web exportée");
 });
+
+// A password-encrypted, self-contained .noteflow file — the honest
+// alternative to "share end-to-end with a contact" without a key-exchange
+// server: the sender picks a password and passes it along whatever channel
+// they already trust (a call, a different app), the recipient imports the
+// file and is prompted for that same password.
+document.getElementById("share-encrypted-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour la partager");
+    return;
+  }
+  await flushSave(true);
+  const password = window.prompt("Mot de passe pour chiffrer ce fichier (à transmettre par un autre canal) :");
+  if (!password) return;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await deriveKey(password, salt);
+  const payload = JSON.stringify({ title: currentNote.title, html: currentNote.html, drawing: currentNote.drawing });
+  const enc = await encryptString(key, payload);
+  const packet = { format: "noteflow-encrypted-v1", salt: bytesToB64(salt), enc };
+  const blob = new Blob([JSON.stringify(packet, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(currentNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.noteflow`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast("Fichier chiffré exporté");
+});
+
+async function importEncryptedPacket(packet) {
+  const password = window.prompt("Mot de passe pour déchiffrer ce fichier :");
+  if (!password) return 0;
+  try {
+    const key = await deriveKey(password, b64ToBytes(packet.salt));
+    const payload = JSON.parse(await decryptString(key, packet.enc));
+    const note = newNoteObject();
+    note.title = payload.title || "Note importée";
+    note.html = payload.html || "";
+    note.drawing = payload.drawing || null;
+    notes.unshift(note);
+    await persistNote(note);
+    renderList();
+    return 1;
+  } catch {
+    showToast("Mot de passe incorrect ou fichier invalide");
+    return 0;
+  }
+}
 
 newNoteBtn.addEventListener("click", async () => {
   currentNote = newNoteObject();
