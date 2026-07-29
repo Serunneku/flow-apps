@@ -14,6 +14,7 @@
   --accent-text: #fffdf8;
   --gold: #c8963c;
   --gold-ink: #8a5f18;
+  --grain-opacity: 0.07;
   --danger: #c0392b;
   --radius: 16px;
   --shadow-sm: 1px 1px 2px rgba(23, 20, 15, 0.05), 1px 1px 1px rgba(23, 20, 15, 0.04);
@@ -39,6 +40,7 @@
     --accent-text: #17140f;
     --gold: #d9a94d;
     --gold-ink: #d9a94d;
+    --grain-opacity: 0.03;
     --danger: #ff6b52;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(217, 169, 77, 0.05);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(217, 169, 77, 0.06);
@@ -62,6 +64,7 @@
   --accent-text: #fffdf8;
   --gold: #c8963c;
   --gold-ink: #8a5f18;
+  --grain-opacity: 0.07;
   --danger: #c0392b;
   --shadow-sm: 1px 1px 2px rgba(23, 20, 15, 0.05), 1px 1px 1px rgba(23, 20, 15, 0.04);
   --shadow-md: 1px 1px 2px rgba(23, 20, 15, 0.06), 2px 8px 20px rgba(23, 20, 15, 0.08);
@@ -84,6 +87,7 @@
   --accent-text: #17140f;
   --gold: #d9a94d;
   --gold-ink: #d9a94d;
+  --grain-opacity: 0.03;
   --danger: #ff6b52;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(217, 169, 77, 0.05);
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(217, 169, 77, 0.06);
@@ -1124,11 +1128,38 @@ button {
 }
 
 .save-indicator {
+  position: relative;
   font-size: 12px;
   color: var(--muted);
   flex: 1;
   text-align: center;
   transition: opacity 0.2s var(--ease);
+}
+
+.save-indicator.ink-dry::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--gold-ink), transparent 70%);
+  animation: inkDry 0.6s var(--ease);
+  pointer-events: none;
+}
+
+@keyframes inkDry {
+  from { transform: scale(0.4); opacity: 0.6; }
+  to { transform: scale(3.4); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .save-indicator.ink-dry::before {
+    animation: none;
+    display: none;
+  }
 }
 
 .title-input {
@@ -1403,8 +1434,9 @@ select option {
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
-  opacity: 0.05;
+  opacity: var(--grain-opacity, 0.05);
   mix-blend-mode: multiply;
+  transition: opacity 0.25s var(--ease);
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
   /* Pinned to an absolute origin (not "auto") so the grain never
      re-samples/snaps to a different pixel during the page-turn or

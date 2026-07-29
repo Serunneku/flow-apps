@@ -924,6 +924,7 @@ async function deleteNote(id) {
   note.deletedAt = Date.now();
   await persistNote(note);
   renderList();
+  if (navigator.vibrate) navigator.vibrate(10);
   showToast("Note déplacée dans la corbeille", async () => {
     note.deletedAt = null;
     await persistNote(note);
@@ -1329,6 +1330,9 @@ async function flushSave(immediate) {
     await persistNote(currentNote);
     if (!immediate) {
       saveIndicator.textContent = "Enregistré";
+      saveIndicator.classList.remove("ink-dry");
+      void saveIndicator.offsetWidth;
+      saveIndicator.classList.add("ink-dry");
       playSaveSound();
     }
   } catch (err) {
@@ -1564,6 +1568,7 @@ async function attemptUnlock() {
   await persistNote(note);
   lockOverlay.classList.add("hidden");
   currentNote = note;
+  if (navigator.vibrate) navigator.vibrate(15);
   loadNoteIntoEditor();
   showEditor();
 }
@@ -1598,6 +1603,7 @@ lockBtn.addEventListener("click", async () => {
     currentNote.html = "";
     currentNote.drawing = null;
     redrawStrokes();
+    if (navigator.vibrate) navigator.vibrate(15);
     showToast("Note verrouillée et chiffrée");
     showList();
   } else {
@@ -1632,6 +1638,7 @@ lockBtn.addEventListener("click", async () => {
     setLockIcon(false);
     setPressed(lockBtn, false);
     loadNoteIntoEditor();
+    if (navigator.vibrate) navigator.vibrate(15);
     showToast("Verrou retiré");
   }
 });
@@ -2641,6 +2648,7 @@ function renderColorRow() {
       setPressed(eraserBtn, false);
       colorRow.querySelectorAll(".color-swatch").forEach((s) => s.classList.remove("selected"));
       swatch.classList.add("selected");
+      updateDrawCursor();
     });
     colorRow.appendChild(swatch);
   });
@@ -2667,6 +2675,7 @@ function updateWidthUI() {
   const dotSize = Math.min(Math.max(drawWidth, 4), 28);
   widthPreviewDot.style.width = dotSize + "px";
   widthPreviewDot.style.height = dotSize + "px";
+  updateDrawCursor();
 }
 updateWidthUI();
 
@@ -2676,6 +2685,21 @@ widthSlider.addEventListener("input", () => {
   toolWidths[tool] = drawWidth;
   updateWidthUI();
 });
+
+// The mouse cursor itself becomes a small swatch of the current tool's
+// color/size while drawing, instead of a generic crosshair — a contextual
+// pen that shows exactly what the next stroke will look like.
+function updateDrawCursor() {
+  const size = Math.max(6, Math.min(drawWidth, 36));
+  const dim = Math.round(size + 6);
+  const half = dim / 2;
+  const fill = isErasing ? "none" : drawColor;
+  const strokeColor = isErasing ? "#8a8a8a" : "rgba(0,0,0,0.4)";
+  const fillOpacity = isHighlighting ? 0.45 : 0.85;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${dim}" height="${dim}"><circle cx="${half}" cy="${half}" r="${size / 2}" fill="${fill}" fill-opacity="${fillOpacity}" stroke="${strokeColor}" stroke-width="1.5"/></svg>`;
+  const b64 = btoa(svg);
+  canvas.style.cursor = `url("data:image/svg+xml;base64,${b64}") ${half} ${half}, crosshair`;
+}
 
 eraserBtn.addEventListener("click", () => {
   setTool(isErasing ? "pen" : "eraser");
