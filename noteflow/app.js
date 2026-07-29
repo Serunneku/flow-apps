@@ -3159,6 +3159,142 @@ textEditor.addEventListener("paste", (e) => {
   }
 });
 
+// --- OCR (photo -> texte), chargé à la demande depuis un CDN pour ne pas
+// alourdir le chargement initial de l'app avec un moteur de reconnaissance
+// de plusieurs Mo. ---
+const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+const ocrBtn = document.getElementById("ocr-btn");
+const ocrInput = document.getElementById("ocr-input");
+let tesseractWorkerPromise = null;
+
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = TESSERACT_CDN;
+    script.onload = () => resolve(window.Tesseract);
+    script.onerror = () => reject(new Error("Tesseract CDN unreachable"));
+    document.head.appendChild(script);
+  });
+}
+
+function getTesseractWorker() {
+  if (!tesseractWorkerPromise) {
+    tesseractWorkerPromise = loadTesseract().then((Tesseract) => Tesseract.createWorker("fra"));
+  }
+  return tesseractWorkerPromise;
+}
+
+function insertTextAtCursor(text) {
+  restoreSelection();
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
+    const range = sel.getRangeAt(0);
+    range.collapse(false);
+    range.insertNode(document.createTextNode(text));
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    textEditor.appendChild(document.createTextNode(text));
+  }
+  scheduleSave();
+}
+
+ocrBtn.addEventListener("click", () => {
+  ocrInput.click();
+});
+
+ocrInput.addEventListener("change", async () => {
+  const file = ocrInput.files[0];
+  ocrInput.value = "";
+  if (!file) return;
+  ocrBtn.classList.add("busy-guard");
+  showToast("Lecture du texte de la photo…");
+  try {
+    const worker = await getTesseractWorker();
+    const { data } = await worker.recognize(file);
+    const text = (data.text || "").trim();
+    if (!text) {
+      showToast("Aucun texte détecté sur cette photo");
+    } else {
+      insertTextAtCursor(text);
+      showToast("Texte extrait et ajouté à la note");
+    }
+  } catch {
+    showToast("OCR indisponible (connexion requise pour charger le moteur)");
+  } finally {
+    ocrBtn.classList.remove("busy-guard");
+  }
+});
+
+// --- Scan QR code / code-barres, chargé à la demande depuis un CDN. ---
+const JSQR_CDN = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+const scanCodeBtn = document.getElementById("scan-code-btn");
+const scanCodeInput = document.getElementById("scan-code-input");
+let jsQRPromise = null;
+
+function loadJsQR() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  if (!jsQRPromise) {
+    jsQRPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = JSQR_CDN;
+      script.onload = () => resolve(window.jsQR);
+      script.onerror = () => reject(new Error("jsQR CDN unreachable"));
+      document.head.appendChild(script);
+    });
+  }
+  return jsQRPromise;
+}
+
+function looksLikeUrl(text) {
+  return /^https?:\/\//i.test(text.trim());
+}
+
+scanCodeBtn.addEventListener("click", () => {
+  scanCodeInput.click();
+});
+
+scanCodeInput.addEventListener("change", async () => {
+  const file = scanCodeInput.files[0];
+  scanCodeInput.value = "";
+  if (!file) return;
+  scanCodeBtn.classList.add("busy-guard");
+  try {
+    const jsQR = await loadJsQR();
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+    const img = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = reject;
+      image.src = dataUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx2d = canvas.getContext("2d");
+    ctx2d.drawImage(img, 0, 0);
+    const imageData = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
+    const result = jsQR(imageData.data, imageData.width, imageData.height);
+    if (!result || !result.data) {
+      showToast("Aucun QR code détecté sur cette photo");
+    } else {
+      const value = result.data;
+      insertTextAtCursor(value);
+      showToast(looksLikeUrl(value) ? "Lien détecté et ajouté à la note" : "Contenu du code ajouté à la note");
+    }
+  } catch {
+    showToast("Scan indisponible (connexion requise pour charger le moteur)");
+  } finally {
+    scanCodeBtn.classList.remove("busy-guard");
+  }
+});
+
 // --- Find & replace ---
 const findPanel = document.getElementById("find-panel");
 const findInput = document.getElementById("find-input");
