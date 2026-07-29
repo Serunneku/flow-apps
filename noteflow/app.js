@@ -336,8 +336,10 @@ importInput.addEventListener("change", async () => {
   if (!file) return;
   try {
     const text = await file.text();
-    const imported = JSON.parse(text);
-    if (!Array.isArray(imported)) throw new Error("format invalide");
+    const parsed = JSON.parse(text);
+    // A single-note export (see "Exporter cette note") is a plain object,
+    // not an array — accept both.
+    const imported = Array.isArray(parsed) ? parsed : [parsed];
     let added = 0;
     let updated = 0;
     for (const note of imported) {
@@ -625,9 +627,10 @@ function renderList() {
   notesListEl.innerHTML = "";
   notesEmptyEl.classList.toggle("show", visible.length === 0);
 
-  visible.forEach((note) => {
+  visible.forEach((note, index) => {
     const li = document.createElement("li");
-    li.className = "note-item";
+    li.className = "note-item note-in";
+    li.style.animationDelay = `${Math.min(index, 12) * 28}ms`;
     const preview = note.locked
       ? "Note verrouillée"
       : getPreview(note) || (note.drawing && note.drawing.strokes.length ? "Dessin" : "Note vide");
@@ -917,6 +920,45 @@ duplicateNoteBtn.addEventListener("click", async () => {
   currentNote = copy;
   loadNoteIntoEditor();
   showToast("Note dupliquée");
+});
+
+// --- Share / export a single note ---
+document.getElementById("share-note-btn").addEventListener("click", async () => {
+  const title = titleInput.value.trim() || "Note NoteFlow";
+  const text = (titleInput.value.trim() ? title + "\n\n" : "") + textEditor.textContent.trim();
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text });
+    } catch {
+      /* user cancelled the native share sheet: nothing to do */
+    }
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    showToast("Copié dans le presse-papiers");
+  } else {
+    showToast("Partage non disponible sur ce navigateur");
+  }
+});
+
+async function noteForExport(note) {
+  if (note.locked && activeUnlockKey && activeUnlockKey.noteId === note.id) {
+    const blob = JSON.stringify({ html: note.html, drawing: note.drawing, history: note.history });
+    const enc = await encryptString(activeUnlockKey.key, blob);
+    return { ...note, html: "", drawing: null, history: [], encBlob: enc };
+  }
+  return note;
+}
+
+document.getElementById("export-note-btn").addEventListener("click", async () => {
+  await flushSave(true);
+  const exportNote = await noteForExport(currentNote);
+  const blob = new Blob([JSON.stringify(exportNote, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(exportNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 });
 
 newNoteBtn.addEventListener("click", async () => {

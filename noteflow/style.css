@@ -870,6 +870,21 @@ button {
   transition: box-shadow 0.2s var(--ease), transform 0.2s var(--ease), opacity 0.15s var(--ease);
 }
 
+@keyframes noteIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.note-item.note-in {
+  animation: noteIn 0.28s var(--ease) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-item.note-in {
+    animation: none;
+  }
+}
+
 .note-item.dragging {
   opacity: 0.4;
 }
@@ -1041,6 +1056,29 @@ button {
 .note-item .note-action.danger:hover {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+@keyframes pressSpring {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.9); }
+  70% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.note-action.danger:active,
+.menu-item.danger:active,
+#delete-note-btn:active,
+#sel-delete-btn:active {
+  animation: pressSpring 0.32s var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-action.danger:active,
+  .menu-item.danger:active,
+  #delete-note-btn:active,
+  #sel-delete-btn:active {
+    animation: none;
+  }
 }
 
 .empty {
