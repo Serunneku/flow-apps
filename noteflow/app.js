@@ -1205,6 +1205,7 @@ function loadNoteIntoEditor() {
   folderInput.value = currentNote.folder || "";
   tagsInput.value = (currentNote.tags || []).join(", ");
   textEditor.innerHTML = currentNote.html || "";
+  refreshTransclusions();
   setPressed(pinBtn, !!currentNote.pinned);
   setLockIcon(!!currentNote.locked);
   setPressed(lockBtn, !!currentNote.locked);
@@ -2097,6 +2098,9 @@ textEditor.addEventListener("input", () => {
   const text = node.textContent.slice(0, offset);
   const match = text.match(/\[\[([^[\]]+)\]\]$/);
   if (!match) return;
+  // A leading "!" (![[Titre]]) is transclusion, handled by a separate
+  // listener below — this one only handles a plain wikilink.
+  if (text[text.length - match[0].length - 1] === "!") return;
   const query = match[1].trim().toLowerCase();
   if (!query) return;
   const target =
@@ -2133,6 +2137,76 @@ textEditor.addEventListener("click", (e) => {
   e.preventDefault();
   const id = link.dataset.noteId;
   if (notes.some((n) => n.id === id)) goToNote(id);
+});
+
+// --- Transclusion: typing ![[Titre]] embeds a read-only, refreshed-on-open
+// snapshot of that note's content right here, instead of just linking to it. ---
+function renderTransclusionBlock(el, note) {
+  el.innerHTML = "";
+  const header = document.createElement("div");
+  header.className = "transclusion-header";
+  header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
+  const body = document.createElement("div");
+  body.className = "transclusion-body";
+  body.innerHTML = note.locked ? "<p><em>Cette note est verrouillée.</em></p>" : note.html || "<p><em>Note vide.</em></p>";
+  el.appendChild(header);
+  el.appendChild(body);
+}
+
+function insertTransclusionBlock(target) {
+  const div = document.createElement("div");
+  div.className = "transclusion";
+  div.contentEditable = "false";
+  div.dataset.noteId = target.id;
+  renderTransclusionBlock(div, target);
+  return div;
+}
+
+// Every embedded transclusion is refreshed from the current state of its
+// source note whenever the containing note is (re)opened — not truly live
+// while both are open at once, but never stale on view.
+function refreshTransclusions() {
+  textEditor.querySelectorAll(".transclusion[data-note-id]").forEach((el) => {
+    const source = notes.find((n) => n.id === el.dataset.noteId && !n.deletedAt);
+    if (!source) {
+      el.innerHTML = '<div class="transclusion-header">↳ Note source introuvable (supprimée)</div>';
+      return;
+    }
+    renderTransclusionBlock(el, source);
+  });
+}
+
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = sel.getRangeAt(0).startOffset;
+  const text = node.textContent.slice(0, offset);
+  const match = text.match(/!\[\[([^[\]]+)\]\]$/);
+  if (!match) return;
+  const query = match[1].trim().toLowerCase();
+  if (!query) return;
+  const target =
+    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+  if (!target) return;
+  const full = match[0];
+  const range = document.createRange();
+  try {
+    range.setStart(node, offset - full.length);
+    range.setEnd(node, offset);
+    range.deleteContents();
+    const block = insertTransclusionBlock(target);
+    range.insertNode(block);
+    const p = document.createElement("p");
+    p.innerHTML = "<br>";
+    block.after(p);
+    placeCaretAtStart(p);
+    scheduleSave();
+  } catch {
+    /* selection edge case: skip silently */
+  }
 });
 
 growPageBtn.addEventListener("click", () => {
