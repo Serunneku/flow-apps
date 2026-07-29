@@ -14,13 +14,14 @@
   --accent-text: #fffdf8;
   --gold: #c8963c;
   --gold-ink: #8a5f18;
+  --grain-opacity: 0.07;
   --danger: #c0392b;
   --radius: 16px;
-  --shadow-sm: 0 1px 2px rgba(23, 20, 15, 0.05), 0 1px 1px rgba(23, 20, 15, 0.04);
-  --shadow-md: 0 1px 2px rgba(23, 20, 15, 0.06), 0 8px 20px rgba(23, 20, 15, 0.08);
-  --shadow-hover: 0 2px 4px rgba(23, 20, 15, 0.07), 0 14px 30px rgba(23, 20, 15, 0.11);
-  --shadow-page: 0 1px 3px rgba(23, 20, 15, 0.07), 0 18px 40px rgba(23, 20, 15, 0.11);
-  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --shadow-sm: 1px 1px 2px rgba(23, 20, 15, 0.05), 1px 1px 1px rgba(23, 20, 15, 0.04);
+  --shadow-md: 1px 1px 2px rgba(23, 20, 15, 0.06), 2px 8px 20px rgba(23, 20, 15, 0.08);
+  --shadow-hover: 1px 2px 4px rgba(23, 20, 15, 0.07), 2px 14px 30px rgba(23, 20, 15, 0.11);
+  --shadow-page: 1px 1px 3px rgba(23, 20, 15, 0.07), 3px 18px 40px rgba(23, 20, 15, 0.11);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --mesh-1: rgba(200, 150, 60, 0.24);
   --mesh-2: rgba(23, 20, 15, 0.10);
   --mesh-3: rgba(140, 132, 116, 0.18);
@@ -39,11 +40,12 @@
     --accent-text: #17140f;
     --gold: #d9a94d;
     --gold-ink: #d9a94d;
+    --grain-opacity: 0.03;
     --danger: #ff6b52;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45);
-    --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.55);
-    --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(217, 169, 77, 0.05);
+    --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(217, 169, 77, 0.06);
+    --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(217, 169, 77, 0.08);
+    --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(217, 169, 77, 0.07);
     --mesh-1: rgba(217, 169, 77, 0.34);
     --mesh-2: rgba(240, 233, 220, 0.10);
     --mesh-3: rgba(167, 159, 142, 0.20);
@@ -62,11 +64,12 @@
   --accent-text: #fffdf8;
   --gold: #c8963c;
   --gold-ink: #8a5f18;
+  --grain-opacity: 0.07;
   --danger: #c0392b;
-  --shadow-sm: 0 1px 2px rgba(23, 20, 15, 0.05), 0 1px 1px rgba(23, 20, 15, 0.04);
-  --shadow-md: 0 1px 2px rgba(23, 20, 15, 0.06), 0 8px 20px rgba(23, 20, 15, 0.08);
-  --shadow-hover: 0 2px 4px rgba(23, 20, 15, 0.07), 0 14px 30px rgba(23, 20, 15, 0.11);
-  --shadow-page: 0 1px 3px rgba(23, 20, 15, 0.07), 0 18px 40px rgba(23, 20, 15, 0.11);
+  --shadow-sm: 1px 1px 2px rgba(23, 20, 15, 0.05), 1px 1px 1px rgba(23, 20, 15, 0.04);
+  --shadow-md: 1px 1px 2px rgba(23, 20, 15, 0.06), 2px 8px 20px rgba(23, 20, 15, 0.08);
+  --shadow-hover: 1px 2px 4px rgba(23, 20, 15, 0.07), 2px 14px 30px rgba(23, 20, 15, 0.11);
+  --shadow-page: 1px 1px 3px rgba(23, 20, 15, 0.07), 3px 18px 40px rgba(23, 20, 15, 0.11);
   --mesh-1: rgba(200, 150, 60, 0.24);
   --mesh-2: rgba(23, 20, 15, 0.10);
   --mesh-3: rgba(140, 132, 116, 0.18);
@@ -84,11 +87,12 @@
   --accent-text: #17140f;
   --gold: #d9a94d;
   --gold-ink: #d9a94d;
+  --grain-opacity: 0.03;
   --danger: #ff6b52;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45);
-  --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.55);
-  --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(217, 169, 77, 0.05);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(217, 169, 77, 0.06);
+  --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(217, 169, 77, 0.08);
+  --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(217, 169, 77, 0.07);
   --mesh-1: rgba(217, 169, 77, 0.34);
   --mesh-2: rgba(240, 233, 220, 0.10);
   --mesh-3: rgba(167, 159, 142, 0.20);
@@ -96,6 +100,37 @@
 }
 
 * { box-sizing: border-box; }
+
+/* High-contrast accessibility mode, independent from light/dark — stronger
+   borders and text weight for low vision, without turning off the paper
+   grain/texture (unlike a generic "high contrast" browser mode would). */
+:root[data-thick-ink="true"] {
+  --border: color-mix(in srgb, var(--text) 45%, transparent);
+  --muted: color-mix(in srgb, var(--text) 78%, transparent);
+}
+
+:root[data-thick-ink="true"] body {
+  font-weight: 500;
+}
+
+:root[data-thick-ink="true"] .note-item,
+:root[data-thick-ink="true"] .side-panel,
+:root[data-thick-ink="true"] .menu-panel,
+:root[data-thick-ink="true"] .icon-btn,
+:root[data-thick-ink="true"] input,
+:root[data-thick-ink="true"] .custom-select-trigger {
+  border-width: 1.5px;
+}
+
+:root[data-thick-ink="true"] .text-editor a {
+  text-decoration-thickness: 2px;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -408,6 +443,28 @@ button {
 .link-btn.danger:hover {
   color: var(--danger);
   opacity: 0.8;
+}
+
+.gold-dust {
+  position: fixed;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--gold);
+  pointer-events: none;
+  z-index: 999;
+  animation: goldDustFly 0.5s ease-out forwards;
+}
+
+@keyframes goldDustFly {
+  from { transform: translate(0, 0) scale(1); opacity: 0.9; }
+  to { transform: translate(var(--dx), var(--dy)) scale(0.3); opacity: 0; }
+}
+
+.busy-guard {
+  opacity: 0.55;
+  pointer-events: none;
+  filter: saturate(0.7);
 }
 
 .note-select-checkbox {
@@ -840,6 +897,23 @@ button {
   transition: border-color 0.15s var(--ease), color 0.15s var(--ease), background-color 0.15s var(--ease);
 }
 
+.folder-cover-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.folder-chip {
+  border-left-color: var(--gold);
+  border-left-style: solid;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease), background-color 0.15s var(--ease), border-left-width 0.15s var(--ease);
+}
+
 .tag-filter-chip.active {
   border-color: var(--accent);
   color: var(--accent-text);
@@ -855,6 +929,23 @@ button {
   gap: 10px;
   flex: 1;
   overflow-y: auto;
+  perspective: 1200px;
+}
+
+@keyframes folderFlip {
+  from { transform: rotateX(-6deg); opacity: 0.6; }
+  to { transform: rotateX(0deg); opacity: 1; }
+}
+
+.notes-list.folder-flip {
+  animation: folderFlip 0.35s var(--ease);
+  transform-origin: top center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notes-list.folder-flip {
+    animation: none;
+  }
 }
 
 .note-item {
@@ -887,6 +978,18 @@ button {
 
 .note-item.dragging {
   opacity: 0.4;
+  transform: rotate(-2deg) scale(0.98);
+}
+
+@keyframes crumpleOut {
+  0% { transform: scale(1) rotate(0deg); opacity: 1; }
+  40% { transform: scale(0.92) rotate(-3deg) skew(-2deg); opacity: 0.85; }
+  100% { transform: scale(0.55) rotate(8deg) skew(6deg); opacity: 0; }
+}
+
+.note-item.crumple-out {
+  animation: crumpleOut 0.38s var(--ease) forwards;
+  pointer-events: none;
 }
 
 .note-item.drag-over {
@@ -1005,6 +1108,43 @@ button {
   background: var(--gold);
 }
 
+.saved-search-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.saved-search-chip > button:first-child {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 4px 4px 4px 12px;
+}
+
+.saved-search-chip.active {
+  border-color: var(--gold);
+  background: var(--gold);
+  color: var(--accent-text);
+}
+
+.saved-search-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 10px 4px 2px;
+}
+
+.saved-search-remove:hover {
+  opacity: 1;
+}
+
 .note-item .note-reminder-chip {
   display: inline-flex;
   align-items: center;
@@ -1100,11 +1240,38 @@ button {
 }
 
 .save-indicator {
+  position: relative;
   font-size: 12px;
   color: var(--muted);
   flex: 1;
   text-align: center;
   transition: opacity 0.2s var(--ease);
+}
+
+.save-indicator.ink-dry::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--gold-ink), transparent 70%);
+  animation: inkDry 0.6s var(--ease);
+  pointer-events: none;
+}
+
+@keyframes inkDry {
+  from { transform: scale(0.4); opacity: 0.6; }
+  to { transform: scale(3.4); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .save-indicator.ink-dry::before {
+    animation: none;
+    display: none;
+  }
 }
 
 .title-input {
@@ -1379,9 +1546,18 @@ select option {
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
-  opacity: 0.05;
+  opacity: var(--grain-opacity, 0.05);
   mix-blend-mode: multiply;
+  transition: opacity 0.25s var(--ease);
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  /* Pinned to an absolute origin (not "auto") so the grain never
+     re-samples/snaps to a different pixel during the page-turn or
+     cover-flip transforms — it stays visually the same texture throughout
+     the animation instead of appearing to "jump" at the last frame. */
+  background-position: var(--grain-x, 0) var(--grain-y, 0);
+  background-repeat: repeat;
+  backface-visibility: hidden;
+  transition: background-position 0.3s var(--ease);
 }
 
 .note-page::after {
@@ -1391,7 +1567,8 @@ select option {
   z-index: 3;
   pointer-events: none;
   border-radius: inherit;
-  box-shadow: inset 10px 0 16px -14px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 10px 0 16px -14px rgba(0, 0, 0, calc(0.35 + var(--scroll-depth, 0) * 0.25));
+  transition: box-shadow 0.15s var(--ease);
 }
 
 @keyframes pageTurn {
@@ -1460,6 +1637,15 @@ select option {
   font-size: 15px;
   line-height: 1.65;
   outline: none;
+  caret-color: var(--paper-gold-ink);
+  transition: caret-color 0.25s var(--ease);
+}
+
+/* The caret brightens while typing at a fast cadence, like a fountain-pen
+   nib following the hand — the closest a browser lets a native caret get to
+   "reacting" to input, since its width/shape aren't stylable. */
+.text-editor.typing-fast {
+  caret-color: var(--gold);
 }
 
 .note-page.mode-draw .text-editor {
@@ -1490,6 +1676,18 @@ select option {
 .text-editor h2:first-child { margin-top: 0; }
 
 .text-editor p { margin: 0 0 0.6em; }
+
+/* A decorative drop cap on long notes only — purely typographic, no
+   functional meaning, toggled once a note passes a length threshold. */
+.text-editor.long-note > p:first-child::first-letter,
+.text-editor.long-note > *:first-child > p:first-child::first-letter {
+  float: left;
+  font-size: 2.8em;
+  line-height: 0.85;
+  font-weight: 700;
+  padding: 0.05em 0.08em 0 0;
+  color: var(--paper-gold-ink);
+}
 
 .text-editor ul, .text-editor ol {
   padding-left: 22px;
@@ -1590,6 +1788,34 @@ select option {
   text-underline-offset: 2px;
 }
 
+.text-editor .transclusion {
+  margin: 0.6em 0;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--gold) 30%, transparent);
+  border-left: 3px solid var(--gold);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gold) 6%, transparent);
+  cursor: default;
+}
+
+.text-editor .transclusion-header {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--paper-gold-ink);
+  margin-bottom: 6px;
+  opacity: 0.8;
+}
+
+.text-editor .transclusion-body {
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+.text-editor .transclusion-body p:last-child {
+  margin-bottom: 0;
+}
+
 .text-editor img {
   max-width: 100%;
   border-radius: 10px;
@@ -1644,6 +1870,68 @@ select option {
     border: none !important;
     overflow: visible !important;
   }
+}
+
+.bookmark-ribbon {
+  position: absolute;
+  top: 0;
+  right: 22px;
+  width: 16px;
+  height: calc(22px + var(--scroll-depth, 0) * 46px);
+  background: linear-gradient(180deg, var(--gold), color-mix(in srgb, var(--gold) 70%, black));
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 78%, 0 100%);
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.85;
+  transition: height 0.15s var(--ease), opacity 0.3s var(--ease);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.corner-fold {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 70px;
+  height: 70px;
+  z-index: 2;
+}
+
+.writing-quote {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px;
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--paper-gold-ink);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s var(--ease);
+}
+
+.writing-quote.show {
+  opacity: 1;
+}
+
+.page-folio {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 1;
+  font-size: 11px;
+  font-variant: small-caps;
+  letter-spacing: 0.12em;
+  color: var(--paper-gold-ink);
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .grow-page-btn {
@@ -1763,6 +2051,33 @@ a:focus-visible,
   border-color: var(--accent);
 }
 
+/* A discreet gold-rimmed frame + a faint cinematic vignette at the screen
+   edges — turns "focus mode" into a spotlight-lit writing ritual rather
+   than just hiding the toolbars. */
+#editor-screen.focus-mode::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 30%, transparent);
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.07) 100%);
+  opacity: 0;
+  animation: focusFrameIn 0.5s var(--ease) forwards;
+}
+
+@keyframes focusFrameIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #editor-screen.focus-mode::after {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 /* --- Lock overlay --- */
 .lock-overlay {
   position: fixed;
@@ -1817,7 +2132,19 @@ a:focus-visible,
 
 .lock-input:focus {
   outline: none;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 35%, transparent);
+  animation: lockPulse 3s var(--ease) infinite;
+}
+
+@keyframes lockPulse {
+  0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 25%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--gold) 40%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-input:focus {
+    animation: none;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 35%, transparent);
+  }
 }
 
 .lock-error {

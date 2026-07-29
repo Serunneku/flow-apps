@@ -54,6 +54,10 @@ const PREF_KEYS = {
   sort: "noteflow.sort",
   streakDate: "noteflow.streak.date",
   streakCount: "noteflow.streak.count",
+  sound: "noteflow.sound",
+  savedSearches: "noteflow.savedSearches",
+  thickInk: "noteflow.thickInk",
+  folderCovers: "noteflow.folderCovers",
 };
 const loadPref = (key, fallback) => {
   try {
@@ -74,6 +78,94 @@ let listView = "active"; // "active" | "archived" | "trash"
 let selectionMode = false;
 let selectedIds = new Set();
 
+// --- Synthesized sound design (off by default — a note app should never
+// make noise without being asked to) ---
+let soundEnabled = loadPref(PREF_KEYS.sound, false);
+let audioCtx = null;
+let ambientFocusNode = null;
+
+function getAudioCtx() {
+  if (!soundEnabled) return null;
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    audioCtx = new AC();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function playTone(freq, duration, type, gainPeak) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type || "sine";
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(gainPeak ?? 0.05, ctx.currentTime + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + duration + 0.02);
+}
+
+// A very short, soft click — a pen tip touching paper — when a note is created.
+function playCreateSound() {
+  playTone(680, 0.05, "sine", 0.05);
+}
+
+// Two distinct, brief sonic signatures instead of one generic beep: a small
+// ascending interval for success, a single lower note for a failure.
+function playSaveSound() {
+  playTone(520, 0.08, "sine", 0.04);
+  setTimeout(() => playTone(780, 0.1, "sine", 0.035), 60);
+}
+
+function playErrorSound() {
+  playTone(180, 0.18, "triangle", 0.05);
+}
+
+// A near-inaudible filtered noise loop for focus mode — the feel of a room
+// that's alive rather than a flat digital silence. Opt-in, like every sound
+// here, and only ever starts from a real user gesture.
+function startAmbientFocusSound() {
+  const ctx = getAudioCtx();
+  if (!ctx || ambientFocusNode) return;
+  const bufferSize = 2 * ctx.sampleRate;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  noise.loop = true;
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 350;
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  noise.connect(filter).connect(gain).connect(ctx.destination);
+  noise.start();
+  gain.gain.linearRampToValueAtTime(0.006, ctx.currentTime + 1.2);
+  ambientFocusNode = { noise, gain };
+}
+
+function stopAmbientFocusSound() {
+  if (!ambientFocusNode) return;
+  const ctx = getAudioCtx() || audioCtx;
+  const { noise, gain } = ambientFocusNode;
+  ambientFocusNode = null;
+  if (!ctx) return;
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+  setTimeout(() => {
+    try {
+      noise.stop();
+    } catch {
+      /* already stopped */
+    }
+  }, 500);
+}
+
 // --- Theme ---
 const themeToggle = document.getElementById("theme-toggle");
 const THEME_ORDER = ["auto", "light", "dark"];
@@ -86,10 +178,31 @@ function applyTheme(t) {
   themeToggle.innerHTML = `<svg class="icon"><use href="#icon-${THEME_ICON[t]}"/></svg>`;
 }
 applyTheme(theme);
-themeToggle.addEventListener("click", () => {
-  theme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
-  savePref(PREF_KEYS.theme, theme);
-  applyTheme(theme);
+themeToggle.addEventListener("click", (e) => {
+  const nextTheme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
+  const commit = () => {
+    theme = nextTheme;
+    savePref(PREF_KEYS.theme, theme);
+    applyTheme(theme);
+  };
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!document.startViewTransition || reduceMotion) {
+    commit();
+    return;
+  }
+  // The theme change reveals itself as a circle expanding from the toggle
+  // button, instead of a flat cross-fade — the same "iris" pattern as
+  // Android 12/Material You's theme switch.
+  const x = e.clientX;
+  const y = e.clientY;
+  const endRadius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+  const transition = document.startViewTransition(commit);
+  transition.ready.then(() => {
+    document.documentElement.animate(
+      { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${endRadius}px at ${x}px ${y}px)`] },
+      { duration: 500, easing: "cubic-bezier(0.22, 1, 0.36, 1)", pseudoElement: "::view-transition-new(root)" }
+    );
+  });
 });
 
 // --- Daily streak (local, based on days with at least one save) ---
@@ -158,6 +271,40 @@ document.querySelectorAll("button[title]:not([aria-label])").forEach((btn) => {
 });
 setupMenu("list-menu-btn", "list-menu");
 setupMenu("editor-menu-btn", "editor-menu");
+
+const soundToggleBtn = document.getElementById("sound-toggle-btn");
+const soundToggleLabel = document.createTextNode("");
+soundToggleBtn.innerHTML = '<svg class="icon"><use href="#icon-sound"/></svg>';
+soundToggleBtn.appendChild(soundToggleLabel);
+function updateSoundToggleLabel() {
+  soundToggleLabel.textContent = soundEnabled ? "Sons : activés" : "Sons : désactivés";
+}
+updateSoundToggleLabel();
+soundToggleBtn.addEventListener("click", () => {
+  soundEnabled = !soundEnabled;
+  savePref(PREF_KEYS.sound, soundEnabled);
+  updateSoundToggleLabel();
+  if (soundEnabled) playCreateSound();
+});
+
+// --- High-contrast "thick ink" mode: a distinct accessibility mode from
+// light/dark, for low-vision users — stronger borders/text, grain kept. ---
+const contrastToggleBtn = document.getElementById("contrast-toggle-btn");
+const contrastToggleLabel = document.createTextNode("");
+contrastToggleBtn.innerHTML = '<svg class="icon"><use href="#icon-contrast"/></svg>';
+contrastToggleBtn.appendChild(contrastToggleLabel);
+let thickInkEnabled = loadPref(PREF_KEYS.thickInk, false);
+function applyThickInk() {
+  if (thickInkEnabled) document.documentElement.setAttribute("data-thick-ink", "true");
+  else document.documentElement.removeAttribute("data-thick-ink");
+  contrastToggleLabel.textContent = thickInkEnabled ? "Contraste renforcé : activé" : "Contraste renforcé : désactivé";
+}
+applyThickInk();
+contrastToggleBtn.addEventListener("click", () => {
+  thickInkEnabled = !thickInkEnabled;
+  savePref(PREF_KEYS.thickInk, thickInkEnabled);
+  applyThickInk();
+});
 
 // --- Custom dropdowns (native <select> stays as the source of truth; this
 // only replaces how it's presented, so all existing "change" logic keeps working) ---
@@ -245,6 +392,45 @@ function setPressed(el, state) {
   el.setAttribute("aria-pressed", String(!!state));
 }
 
+// Wraps a critical/destructive action's click handler so a second click
+// during the async operation is ignored instead of silently double-firing
+// (e.g. a bulk delete run twice on a slow device). The button dims briefly
+// and re-enables itself once the handler settles.
+function guardDoubleClick(el, handler) {
+  el.addEventListener("click", async (e) => {
+    if (el.disabled) return;
+    el.disabled = true;
+    el.classList.add("busy-guard");
+    try {
+      await handler(e);
+    } finally {
+      setTimeout(() => {
+        el.disabled = false;
+        el.classList.remove("busy-guard");
+      }, 400);
+    }
+  });
+}
+
+// A short burst of gold particles confirming a successful drag-and-drop,
+// instead of only the (easy to miss) list re-render.
+function spawnGoldDust(x, y) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const count = 8;
+  for (let i = 0; i < count; i++) {
+    const dot = document.createElement("span");
+    dot.className = "gold-dust";
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+    const dist = 16 + Math.random() * 18;
+    dot.style.left = x + "px";
+    dot.style.top = y + "px";
+    dot.style.setProperty("--dx", `${Math.cos(angle) * dist}px`);
+    dot.style.setProperty("--dy", `${Math.sin(angle) * dist}px`);
+    document.body.appendChild(dot);
+    dot.addEventListener("animationend", () => dot.remove());
+  }
+}
+
 // --- Toast (with optional undo) ---
 const toastEl = document.getElementById("toast");
 const toastText = document.getElementById("toast-text");
@@ -256,6 +442,13 @@ let toastIsUndoable = false;
 function showToast(message, onUndo, options) {
   const { actionLabel, ctrlZ = true } = options || {};
   clearTimeout(toastTimer);
+  // toast-text already carries role="status" (an implicit ARIA live
+  // region), so every one of these warm, branded messages ("Note
+  // verrouillée et chiffrée", not "Error: locked=true") is already
+  // announced to screen readers — clearing first forces a re-announcement
+  // even when two consecutive actions produce the exact same text.
+  toastText.textContent = "";
+  void toastText.offsetWidth;
   toastText.textContent = message;
   toastUndo.textContent = actionLabel || "Annuler";
   toastUndo.classList.toggle("hidden", !onUndo);
@@ -291,6 +484,7 @@ function showList() {
   }
   listScreen.classList.add("active");
   editorScreen.classList.remove("active");
+  stopAmbientFocusSound();
   renderList();
 }
 
@@ -331,31 +525,149 @@ exportBtn.addEventListener("click", () => {
 
 importBtn.addEventListener("click", () => importInput.click());
 
+// iCalendar (.ics) and vCard (.vcf) both fold long lines with a leading
+// space/tab continuation — unfold before parsing either format.
+function unfoldTextLines(text) {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .reduce((acc, line) => {
+      if ((line.startsWith(" ") || line.startsWith("\t")) && acc.length) {
+        acc[acc.length - 1] += line.slice(1);
+      } else {
+        acc.push(line);
+      }
+      return acc;
+    }, []);
+}
+
+function parseIcsDate(value) {
+  const m = value.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2}))?/);
+  if (!m) return null;
+  const [, y, mo, d, h = "00", mi = "00", s = "00"] = m;
+  return new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s));
+}
+
+async function importIcs(text) {
+  const lines = unfoldTextLines(text);
+  let count = 0;
+  let current = null;
+  for (const line of lines) {
+    if (line.startsWith("BEGIN:VEVENT")) {
+      current = {};
+      continue;
+    }
+    if (line.startsWith("END:VEVENT")) {
+      if (current) {
+        const note = newNoteObject();
+        note.title = current.summary || "Événement";
+        note.folder = "Calendrier";
+        const parts = [];
+        if (current.dtstart) parts.push(`<p><strong>Début :</strong> ${current.dtstart.toLocaleString("fr-FR")}</p>`);
+        if (current.dtend) parts.push(`<p><strong>Fin :</strong> ${current.dtend.toLocaleString("fr-FR")}</p>`);
+        if (current.location) parts.push(`<p><strong>Lieu :</strong> ${escapeHtml(current.location)}</p>`);
+        if (current.description) parts.push(`<p>${escapeHtml(current.description).replace(/\\n/g, "<br>")}</p>`);
+        note.html = parts.join("") || "<p><em>Aucun détail.</em></p>";
+        notes.unshift(note);
+        await persistNote(note);
+        count++;
+      }
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).split(";")[0].toUpperCase();
+    const value = line.slice(idx + 1);
+    if (key === "SUMMARY") current.summary = value;
+    else if (key === "LOCATION") current.location = value;
+    else if (key === "DESCRIPTION") current.description = value;
+    else if (key === "DTSTART") current.dtstart = parseIcsDate(value);
+    else if (key === "DTEND") current.dtend = parseIcsDate(value);
+  }
+  renderList();
+  return count;
+}
+
+async function importVcf(text) {
+  const lines = unfoldTextLines(text);
+  let count = 0;
+  let current = null;
+  for (const line of lines) {
+    if (line.startsWith("BEGIN:VCARD")) {
+      current = {};
+      continue;
+    }
+    if (line.startsWith("END:VCARD")) {
+      if (current) {
+        const note = newNoteObject();
+        note.title = current.fn || "Contact";
+        note.folder = "Contacts";
+        const parts = [];
+        if (current.tel) parts.push(`<p><strong>Téléphone :</strong> ${escapeHtml(current.tel)}</p>`);
+        if (current.email) parts.push(`<p><strong>Email :</strong> ${escapeHtml(current.email)}</p>`);
+        if (current.org) parts.push(`<p><strong>Organisation :</strong> ${escapeHtml(current.org)}</p>`);
+        note.html = parts.join("") || "<p><em>Aucune information supplémentaire.</em></p>";
+        notes.unshift(note);
+        await persistNote(note);
+        count++;
+      }
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).split(";")[0].toUpperCase();
+    const value = line.slice(idx + 1);
+    if (key === "FN") current.fn = value;
+    else if (key === "TEL") current.tel = value;
+    else if (key === "EMAIL") current.email = value;
+    else if (key === "ORG") current.org = value.replace(/;/g, " · ");
+  }
+  renderList();
+  return count;
+}
+
 importInput.addEventListener("change", async () => {
   const file = importInput.files[0];
   if (!file) return;
+  const name = file.name.toLowerCase();
   try {
-    const text = await file.text();
-    const parsed = JSON.parse(text);
-    // A single-note export (see "Exporter cette note") is a plain object,
-    // not an array — accept both.
-    const imported = Array.isArray(parsed) ? parsed : [parsed];
-    let added = 0;
-    let updated = 0;
-    for (const note of imported) {
-      if (!note || !note.id) continue;
-      const index = notes.findIndex((n) => n.id === note.id);
-      if (index === -1) {
-        notes.push(note);
-        added++;
-      } else if ((note.updatedAt || 0) > (notes[index].updatedAt || 0)) {
-        notes[index] = note;
-        updated++;
+    if (name.endsWith(".ics")) {
+      const count = await importIcs(await file.text());
+      showToast(`${count} note${count > 1 ? "s" : ""} importée${count > 1 ? "s" : ""} depuis le calendrier`);
+    } else if (name.endsWith(".vcf")) {
+      const count = await importVcf(await file.text());
+      showToast(`${count} note${count > 1 ? "s" : ""} importée${count > 1 ? "s" : ""} depuis les contacts`);
+    } else if (name.endsWith(".noteflow")) {
+      const packet = JSON.parse(await file.text());
+      const count = await importEncryptedPacket(packet);
+      if (count) showToast("Note déchiffrée et importée");
+    } else {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      // A single-note export (see "Exporter cette note") is a plain object,
+      // not an array — accept both.
+      const imported = Array.isArray(parsed) ? parsed : [parsed];
+      let added = 0;
+      let updated = 0;
+      for (const note of imported) {
+        if (!note || !note.id) continue;
+        const index = notes.findIndex((n) => n.id === note.id);
+        if (index === -1) {
+          notes.push(note);
+          added++;
+        } else if ((note.updatedAt || 0) > (notes[index].updatedAt || 0)) {
+          notes[index] = note;
+          updated++;
+        }
+        await persistNote(note);
       }
-      await persistNote(note);
+      renderList();
+      showToast(`Import terminé : ${added} ajoutée(s), ${updated} mise(s) à jour`);
     }
-    renderList();
-    showToast(`Import terminé : ${added} ajoutée(s), ${updated} mise(s) à jour`);
   } catch (err) {
     showToast("Import impossible : fichier invalide");
   }
@@ -392,10 +704,46 @@ function timeAgo(ts) {
   return new Date(ts).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
 }
 
+// A continuous hue-from-hash (0-360°) can land two folders on hues that
+// read as the same color under deuteranopia/protanopia (e.g. a muted red
+// next to a muted green). This fixed set is built around the Okabe-Ito
+// colorblind-safe palette instead, so any two folders stay visually
+// distinguishable regardless of which two hashes collide.
+const FOLDER_COLOR_PALETTE = [
+  "#8a5f18", "#0072B2", "#009E73", "#D55E00",
+  "#5B4FA0", "#CC79A7", "#3A6B8C", "#946A3D",
+  "#2E7D6B", "#7A4B8A", "#B08600", "#4A5FA5",
+];
+
 function folderColor(folder) {
   let hash = 0;
   for (let i = 0; i < folder.length; i++) hash = folder.charCodeAt(i) + ((hash << 5) - hash);
-  return `hsl(${Math.abs(hash) % 360}, 28%, 38%)`;
+  return FOLDER_COLOR_PALETTE[Math.abs(hash) % FOLDER_COLOR_PALETTE.length];
+}
+
+// A curated, restrained set of "cover" gradients a folder can be assigned to
+// on purpose — not an arbitrary color/emoji picker, closer to choosing a
+// binding cloth than tagging with a random color.
+const FOLDER_COVER_TEXTURES = [
+  "linear-gradient(135deg, #8a5f18, #b08600)",
+  "linear-gradient(135deg, #0072B2, #4A5FA5)",
+  "linear-gradient(135deg, #009E73, #2E7D6B)",
+  "linear-gradient(135deg, #D55E00, #946A3D)",
+  "linear-gradient(135deg, #5B4FA0, #7A4B8A)",
+  "linear-gradient(135deg, #3A6B8C, #4A5FA5)",
+];
+
+function loadFolderCovers() {
+  return loadPref(PREF_KEYS.folderCovers, {});
+}
+function saveFolderCovers(map) {
+  savePref(PREF_KEYS.folderCovers, map);
+}
+
+function folderDisplayColor(folder) {
+  const covers = loadFolderCovers();
+  const idx = covers[folder];
+  return idx !== undefined ? FOLDER_COVER_TEXTURES[idx] : folderColor(folder);
 }
 
 function allFolders() {
@@ -404,6 +752,73 @@ function allFolders() {
 
 function allTags() {
   return [...new Set(notes.flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
+}
+
+// --- Global tag manager: rename (or merge, by renaming to an existing tag)
+// across every note at once, instead of a tag being stuck forever once typed. ---
+const tagManagerBtn = document.getElementById("manage-tags-btn");
+const tagManagerPanel = document.getElementById("tag-manager-panel");
+const tagManagerListEl = document.getElementById("tag-manager-list");
+
+tagManagerBtn.addEventListener("click", () => {
+  const opening = tagManagerPanel.classList.contains("hidden");
+  tagManagerPanel.classList.toggle("hidden");
+  if (opening) renderTagManager();
+});
+
+function renderTagManager() {
+  const tags = allTags();
+  tagManagerListEl.innerHTML = "";
+  if (!tags.length) {
+    tagManagerListEl.innerHTML = '<li class="history-empty">Aucun tag pour l\'instant.</li>';
+    return;
+  }
+  tags.forEach((tag) => {
+    const count = notes.filter((n) => (n.tags || []).includes(tag)).length;
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = `#${tag} (${count})`;
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = "6px";
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.textContent = "Renommer";
+    renameBtn.addEventListener("click", async () => {
+      const next = window.prompt(`Renommer #${tag} en :`, tag);
+      if (!next || !next.trim() || next.trim() === tag) return;
+      await renameTagEverywhere(tag, next.trim());
+      renderTagManager();
+    });
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "link-btn danger";
+    deleteBtn.textContent = "Supprimer";
+    deleteBtn.addEventListener("click", async () => {
+      await renameTagEverywhere(tag, null);
+      renderTagManager();
+    });
+    actions.appendChild(renameBtn);
+    actions.appendChild(deleteBtn);
+    li.appendChild(label);
+    li.appendChild(actions);
+    tagManagerListEl.appendChild(li);
+  });
+}
+
+// newTag === null removes the tag entirely (used by the "Supprimer" action);
+// otherwise renaming onto an existing tag merges the two automatically,
+// since tags are deduplicated per note.
+async function renameTagEverywhere(oldTag, newTag) {
+  const affected = notes.filter((n) => (n.tags || []).includes(oldTag));
+  for (const note of affected) {
+    const set = new Set(note.tags.map((t) => (t === oldTag ? newTag : t)).filter(Boolean));
+    note.tags = [...set];
+    await persistNote(note);
+  }
+  renderList();
+  showToast(newTag ? `#${oldTag} renommé en #${newTag}` : `#${oldTag} supprimé de ${affected.length} note(s)`);
 }
 
 let draggedNoteId = null;
@@ -438,13 +853,38 @@ function renderFolderFilters() {
     const depth = parts.length - 1;
     const chip = document.createElement("button");
     chip.type = "button";
-    chip.className = "tag-filter-chip" + (activeFolderFilter === folder ? " active" : "");
+    chip.className = "tag-filter-chip folder-chip" + (activeFolderFilter === folder ? " active" : "");
     if (depth > 0) chip.style.marginLeft = `${depth * 14}px`;
-    chip.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
+    // A thicker "spine" for folders holding more notes — like books lined
+    // up on a shelf by how full they are.
+    const noteCount = notes.filter((n) => !n.deletedAt && (n.folder === folder || (n.folder || "").startsWith(folder + "/"))).length;
+    chip.style.borderLeftWidth = `${Math.min(2 + Math.round(noteCount / 2), 8)}px`;
     chip.title = folder;
+    const labelSpan = document.createElement("span");
+    labelSpan.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
+    const coverSwatch = document.createElement("span");
+    coverSwatch.className = "folder-cover-swatch";
+    coverSwatch.style.background = folderDisplayColor(folder);
+    coverSwatch.title = "Choisir une couverture pour ce dossier";
+    coverSwatch.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const covers = loadFolderCovers();
+      const current = covers[folder] ?? -1;
+      covers[folder] = (current + 1) % FOLDER_COVER_TEXTURES.length;
+      saveFolderCovers(covers);
+      renderFolderFilters();
+    });
+    chip.appendChild(labelSpan);
+    chip.appendChild(coverSwatch);
     chip.addEventListener("click", () => {
       activeFolderFilter = activeFolderFilter === folder ? null : folder;
       renderList();
+      // A brief "cover flip" on the list itself when entering/leaving a
+      // folder — distinct from the note page-turn, since this is opening a
+      // folder's cover rather than a single page.
+      notesListEl.classList.remove("folder-flip");
+      void notesListEl.offsetWidth;
+      notesListEl.classList.add("folder-flip");
     });
     chip.addEventListener("dragover", (e) => e.preventDefault());
     chip.addEventListener("drop", (e) => {
@@ -454,6 +894,7 @@ function renderFolderFilters() {
       if (note) {
         note.folder = folder;
         persistNote(note);
+        spawnGoldDust(e.clientX, e.clientY);
         renderList();
       }
     });
@@ -530,7 +971,7 @@ function toggleSelect(id, li, checkbox) {
 document.getElementById("select-mode-btn").addEventListener("click", () => setSelectionMode(true));
 document.getElementById("sel-cancel-btn").addEventListener("click", () => setSelectionMode(false));
 
-document.getElementById("sel-archive-btn").addEventListener("click", async () => {
+guardDoubleClick(document.getElementById("sel-archive-btn"), async () => {
   const ids = [...selectedIds];
   if (!ids.length) return;
   for (const id of ids) {
@@ -544,7 +985,7 @@ document.getElementById("sel-archive-btn").addEventListener("click", async () =>
   setSelectionMode(false);
 });
 
-document.getElementById("sel-delete-btn").addEventListener("click", async () => {
+guardDoubleClick(document.getElementById("sel-delete-btn"), async () => {
   const ids = [...selectedIds];
   if (!ids.length) return;
   const now = Date.now();
@@ -568,7 +1009,7 @@ document.getElementById("sel-delete-btn").addEventListener("click", async () => 
   setSelectionMode(false);
 });
 
-document.getElementById("sel-move-btn").addEventListener("click", async () => {
+guardDoubleClick(document.getElementById("sel-move-btn"), async () => {
   const ids = [...selectedIds];
   if (!ids.length) return;
   const folder = window.prompt("Déplacer vers quel dossier ?", "");
@@ -588,6 +1029,7 @@ function renderList() {
   notesListEl.classList.toggle("selection-mode", selectionMode);
   if (selectionMode) updateSelectionCount();
   renderFolderFilters();
+  renderSavedSearchChips();
   const query = searchQuery.trim().toLowerCase();
   let visible = notes.filter((n) => {
     if (listView === "trash" && !n.deletedAt) return false;
@@ -658,7 +1100,16 @@ function renderList() {
     if (note.color) li.style.backgroundColor = note.color;
     li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", query);
     li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, query);
-    li.querySelector(".note-date").textContent = timeAgo(note.updatedAt);
+    const dateEl = li.querySelector(".note-date");
+    dateEl.textContent = timeAgo(note.updatedAt);
+    const exactDate = new Date(note.updatedAt).toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" });
+    dateEl.title = exactDate;
+    let longPressTimer = null;
+    dateEl.addEventListener("touchstart", () => {
+      longPressTimer = setTimeout(() => showToast(exactDate), 500);
+    });
+    dateEl.addEventListener("touchend", () => clearTimeout(longPressTimer));
+    dateEl.addEventListener("touchmove", () => clearTimeout(longPressTimer));
     if (note.reminderAt && note.reminderAt > Date.now()) {
       const rem = document.createElement("span");
       rem.className = "note-reminder-chip";
@@ -667,10 +1118,18 @@ function renderList() {
         new Date(note.reminderAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
       li.querySelector(".note-meta").appendChild(rem);
     }
+    if (note.expiresAt && note.expiresAt > Date.now()) {
+      const eph = document.createElement("span");
+      eph.className = "note-reminder-chip";
+      eph.innerHTML =
+        '<svg class="icon"><use href="#icon-clock"/></svg> s\'efface ' +
+        new Date(note.expiresAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      li.querySelector(".note-meta").appendChild(eph);
+    }
     if (note.folder) {
       const chip = document.createElement("span");
       chip.className = "note-folder-chip";
-      chip.style.background = folderColor(note.folder);
+      chip.style.background = folderDisplayColor(note.folder);
       chip.textContent = note.folder;
       li.querySelector(".note-meta").appendChild(chip);
     }
@@ -703,8 +1162,16 @@ function renderList() {
       const btn = e.target.closest(".note-action");
       if (!btn) return;
       const action = btn.dataset.action;
-      if (action === "delete") deleteNote(note.id);
-      else if (action === "restore") restoreNote(note.id);
+      if (action === "delete") {
+        // A crumple, not a fade — the same physical gesture as throwing a
+        // real sheet of paper away, echoing the carnet metaphor.
+        if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          deleteNote(note.id);
+        } else {
+          li.classList.add("crumple-out");
+          li.addEventListener("animationend", () => deleteNote(note.id), { once: true });
+        }
+      } else if (action === "restore") restoreNote(note.id);
       else if (action === "purge") permanentlyDeleteNote(note.id);
       else if (action === "unarchive") setNoteArchived(note.id, false);
     });
@@ -742,6 +1209,75 @@ searchInput.addEventListener("input", () => {
   }, 150);
 });
 
+// --- Saved searches: pin the current query + folder/tag filter combo as a
+// chip, instead of a whole new "smart folder" concept parallel to real ones ---
+const savedSearchChipsEl = document.getElementById("saved-search-chips");
+const saveSearchBtn = document.getElementById("save-search-btn");
+
+function loadSavedSearches() {
+  return loadPref(PREF_KEYS.savedSearches, []);
+}
+function persistSavedSearches(list) {
+  savePref(PREF_KEYS.savedSearches, list);
+}
+
+function renderSavedSearchChips() {
+  const saved = loadSavedSearches();
+  savedSearchChipsEl.classList.toggle("hidden", saved.length === 0);
+  savedSearchChipsEl.innerHTML = "";
+  saved.forEach((s) => {
+    const chip = document.createElement("span");
+    chip.className = "tag-filter-chip saved-search-chip";
+    const isActive = searchQuery === s.query && activeFolderFilter === s.folder && activeTagFilter === s.tag;
+    chip.classList.toggle("active", isActive);
+    const label = document.createElement("button");
+    label.type = "button";
+    label.textContent = "★ " + s.label;
+    label.addEventListener("click", () => {
+      searchQuery = s.query || "";
+      searchInput.value = searchQuery;
+      activeFolderFilter = s.folder || null;
+      activeTagFilter = s.tag || null;
+      renderList();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "saved-search-remove";
+    remove.setAttribute("aria-label", "Supprimer cette recherche enregistrée");
+    remove.textContent = "×";
+    remove.addEventListener("click", (e) => {
+      e.stopPropagation();
+      persistSavedSearches(loadSavedSearches().filter((x) => x.id !== s.id));
+      renderSavedSearchChips();
+    });
+    chip.appendChild(label);
+    chip.appendChild(remove);
+    savedSearchChipsEl.appendChild(chip);
+  });
+}
+renderSavedSearchChips();
+
+saveSearchBtn.addEventListener("click", () => {
+  if (!searchQuery.trim() && !activeFolderFilter && !activeTagFilter) {
+    showToast("Fais d'abord une recherche ou choisis un filtre à enregistrer");
+    return;
+  }
+  const defaultLabel = searchQuery.trim() || activeTagFilter || activeFolderFilter || "Recherche";
+  const label = window.prompt("Nom de cette recherche enregistrée :", defaultLabel);
+  if (!label) return;
+  const saved = loadSavedSearches();
+  saved.push({
+    id: crypto.randomUUID(),
+    label: label.trim(),
+    query: searchQuery,
+    folder: activeFolderFilter,
+    tag: activeTagFilter,
+  });
+  persistSavedSearches(saved);
+  renderSavedSearchChips();
+  showToast("Recherche enregistrée");
+});
+
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 async function deleteNote(id) {
@@ -750,6 +1286,7 @@ async function deleteNote(id) {
   note.deletedAt = Date.now();
   await persistNote(note);
   renderList();
+  if (navigator.vibrate) navigator.vibrate(10);
   showToast("Note déplacée dans la corbeille", async () => {
     note.deletedAt = null;
     await persistNote(note);
@@ -772,6 +1309,9 @@ async function permanentlyDeleteNote(id) {
   notes = notes.filter((n) => n.id !== id);
   await removeNoteEverywhere(id);
   renderList();
+  // A distinct two-beat pattern for the one delete that can't be undone,
+  // instead of the same generic buzz as every other (reversible) action.
+  if (navigator.vibrate) navigator.vibrate([10, 40, 10]);
   showToast("Note supprimée définitivement");
 }
 
@@ -826,7 +1366,11 @@ function newNoteObject() {
     pinCode: null,
     pinSalt: null,
     encBlob: null,
+    bioCredentialId: null,
+    bioSalt: null,
+    bioWrappedKey: null,
     reminderAt: null,
+    expiresAt: null,
     reminderFired: false,
     history: [],
     color: null,
@@ -836,11 +1380,39 @@ function newNoteObject() {
   };
 }
 
-function updateWordCount() {
+let displayedWordCount = 0;
+let wordCountAnimFrame = null;
+
+function formatWordCount(words, chars) {
+  return words ? `${words} mot${words > 1 ? "s" : ""} · ${chars} car.` : "";
+}
+
+// The count "rolls" from its previous value to the new one, like an odometer,
+// instead of jumping straight to the new number on every keystroke.
+function updateWordCount(instant) {
   const text = textEditor.textContent.trim();
   const words = text ? text.split(/\s+/).length : 0;
   const chars = text.length;
-  wordCountEl.textContent = words ? `${words} mot${words > 1 ? "s" : ""} · ${chars} car.` : "";
+  textEditor.classList.toggle("long-note", words > 200);
+  bookmarkRibbonEl.classList.toggle("hidden", words <= 200);
+  cancelAnimationFrame(wordCountAnimFrame);
+  if (instant) {
+    displayedWordCount = words;
+    wordCountEl.textContent = formatWordCount(words, chars);
+    return;
+  }
+  const startWords = displayedWordCount;
+  const startTime = performance.now();
+  const duration = 300;
+  const step = (now) => {
+    const t = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const current = Math.round(startWords + (words - startWords) * eased);
+    wordCountEl.textContent = formatWordCount(current, chars);
+    if (t < 1) wordCountAnimFrame = requestAnimationFrame(step);
+    else displayedWordCount = words;
+  };
+  wordCountAnimFrame = requestAnimationFrame(step);
 }
 
 async function openNote(id) {
@@ -863,6 +1435,7 @@ function loadNoteIntoEditor() {
   folderInput.value = currentNote.folder || "";
   tagsInput.value = (currentNote.tags || []).join(", ");
   textEditor.innerHTML = currentNote.html || "";
+  refreshTransclusions();
   setPressed(pinBtn, !!currentNote.pinned);
   setLockIcon(!!currentNote.locked);
   setPressed(lockBtn, !!currentNote.locked);
@@ -875,17 +1448,20 @@ function loadNoteIntoEditor() {
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
   backlinksPanel.classList.add("hidden");
+  ephemeralPanel.classList.add("hidden");
   colorPanel.classList.add("hidden");
   paperPanel.classList.add("hidden");
   findPanel.classList.add("hidden");
   reminderInput.value = currentNote.reminderAt ? toLocalDatetimeValue(currentNote.reminderAt) : "";
   editorScreen.classList.remove("focus-mode");
+  stopAmbientFocusSound();
   notePage.style.backgroundColor = currentNote.color || "";
   notePage.dataset.paper = currentNote.paperStyle || "blank";
   updateNoteColorSelection();
   updatePaperStyleSelection();
   updateArchiveMenuItem();
-  updateWordCount();
+  updateWordCount(true);
+  updatePageFolio();
   notePage.classList.remove("page-turn");
   void notePage.offsetWidth;
   notePage.classList.add("page-turn");
@@ -921,6 +1497,128 @@ duplicateNoteBtn.addEventListener("click", async () => {
   currentNote = copy;
   loadNoteIntoEditor();
   showToast("Note dupliquée");
+});
+
+// --- Reversible note splitting: one note per H2 heading, each linked back
+// to the original via a wikilink (reuses the existing backlinks panel). ---
+document.getElementById("split-note-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour la scinder");
+    return;
+  }
+  flushSave(true);
+  // childNodes, not children: a fresh note's very first typed line can be a
+  // bare top-level text node (no <p> wrapper yet) — .children alone would
+  // silently drop it from the "intro" section.
+  const children = Array.from(textEditor.childNodes);
+  const splitIndices = children.map((el, i) => (el.nodeType === 1 && el.tagName === "H2" ? i : -1)).filter((i) => i >= 0);
+  if (!splitIndices.length) {
+    showToast("Aucun titre (H2) trouvé pour scinder cette note");
+    return;
+  }
+  const introNodes = children.slice(0, splitIndices[0]);
+  const sections = splitIndices.map((startIdx, i) => {
+    const endIdx = i + 1 < splitIndices.length ? splitIndices[i + 1] : children.length;
+    return children.slice(startIdx, endIdx);
+  });
+  const originalId = currentNote.id;
+  const originalTitle = currentNote.title || "Sans titre";
+  const originalHtmlBackup = currentNote.html;
+  const createdIds = [];
+  const now = Date.now();
+  for (const section of sections) {
+    const [h2, ...rest] = section;
+    const childNote = newNoteObject();
+    childNote.title = h2.textContent.trim() || "Sans titre";
+    childNote.folder = currentNote.folder;
+    childNote.createdAt = now;
+    childNote.updatedAt = now;
+    const backlinkP = document.createElement("p");
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "wikilink";
+    a.dataset.noteId = originalId;
+    a.textContent = originalTitle;
+    backlinkP.appendChild(document.createTextNode("↩ Scindée depuis "));
+    backlinkP.appendChild(a);
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(backlinkP);
+    rest.forEach((n) => wrapper.appendChild(n.cloneNode(true)));
+    childNote.html = wrapper.innerHTML;
+    notes.unshift(childNote);
+    await persistNote(childNote);
+    createdIds.push(childNote.id);
+  }
+  const introWrapper = document.createElement("div");
+  introNodes.forEach((n) => introWrapper.appendChild(n.cloneNode(true)));
+  currentNote.html = introWrapper.innerHTML;
+  currentNote.updatedAt = now;
+  await persistNote(currentNote);
+  textEditor.innerHTML = currentNote.html;
+  updateWordCount(true);
+  renderList();
+  showToast(
+    `Note scindée en ${sections.length} nouvelle${sections.length > 1 ? "s" : ""} note${sections.length > 1 ? "s" : ""}`,
+    async () => {
+      currentNote.html = originalHtmlBackup;
+      currentNote.updatedAt = Date.now();
+      await persistNote(currentNote);
+      for (const id of createdIds) {
+        notes = notes.filter((n) => n.id !== id);
+        await removeNoteEverywhere(id);
+      }
+      textEditor.innerHTML = currentNote.html;
+      updateWordCount(true);
+      renderList();
+    }
+  );
+});
+
+// --- Automatic task extraction: scan free-text sentences for common French
+// action-triggering phrases, turn each into a real checkbox — entirely
+// local heuristic, no data ever leaves the device. ---
+const TASK_PATTERNS = [
+  /\bil faut\s+(.+)/i,
+  /\bje dois\s+(.+)/i,
+  /\bpenser à\s+(.+)/i,
+  /\bne pas oublier de\s+(.+)/i,
+  /\b(?:todo|à faire)\s*:\s*(.+)/i,
+];
+
+document.getElementById("extract-tasks-btn").addEventListener("click", () => {
+  const text = textEditor.textContent || "";
+  const sentences = text
+    .split(/(?<=[.!?\n])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const found = [];
+  sentences.forEach((s) => {
+    for (const re of TASK_PATTERNS) {
+      const m = s.match(re);
+      if (m) {
+        found.push((m[1] || s).replace(/[.!]+$/, "").trim());
+        break;
+      }
+    }
+  });
+  if (!found.length) {
+    showToast("Aucune tâche détectée dans le texte");
+    return;
+  }
+  const header = document.createElement("p");
+  header.innerHTML = "<strong>Tâches extraites :</strong>";
+  const ul = document.createElement("ul");
+  ul.className = "checklist";
+  found.forEach((task) => {
+    const li = makeChecklistLi();
+    li.querySelector("span").textContent = task;
+    ul.appendChild(li);
+  });
+  textEditor.appendChild(header);
+  textEditor.appendChild(ul);
+  scheduleSave();
+  updateWordCount();
+  showToast(`${found.length} tâche${found.length > 1 ? "s" : ""} extraite${found.length > 1 ? "s" : ""}`);
 });
 
 // --- Share / export a single note ---
@@ -962,10 +1660,120 @@ document.getElementById("export-note-btn").addEventListener("click", async () =>
   URL.revokeObjectURL(url);
 });
 
+// A single self-contained HTML file (inline CSS, no external requests) —
+// the user hosts it wherever they like; NoteFlow never becomes a publisher.
+document.getElementById("export-webpage-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour l'exporter");
+    return;
+  }
+  await flushSave(true);
+  const title = escapeHtml(currentNote.title || "Sans titre");
+  const html = `<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    margin: 0;
+    padding: 48px 20px;
+    background: #f0e9dc;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+  }
+  .page {
+    max-width: 640px;
+    width: 100%;
+    background: #fffdf8;
+    color: #17140f;
+    border-radius: 16px;
+    padding: 40px 36px;
+    box-shadow: 0 1px 3px rgba(23,20,15,0.07), 3px 18px 40px rgba(23,20,15,0.11);
+    line-height: 1.65;
+  }
+  h1 { font-size: 26px; margin: 0 0 20px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 1.2em 0 0.5em; }
+  a { color: #8a5f18; }
+  img { max-width: 100%; border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  td { border: 1px solid rgba(23,20,15,0.15); padding: 6px 10px; }
+  .footer { margin-top: 32px; font-size: 12px; color: #6e6656; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <h1>${title}</h1>
+    ${currentNote.html || "<p><em>Note vide.</em></p>"}
+    <p class="footer">Exporté depuis NoteFlow</p>
+  </div>
+</body>
+</html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(currentNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast("Page web exportée");
+});
+
+// A password-encrypted, self-contained .noteflow file — the honest
+// alternative to "share end-to-end with a contact" without a key-exchange
+// server: the sender picks a password and passes it along whatever channel
+// they already trust (a call, a different app), the recipient imports the
+// file and is prompted for that same password.
+document.getElementById("share-encrypted-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour la partager");
+    return;
+  }
+  await flushSave(true);
+  const password = window.prompt("Mot de passe pour chiffrer ce fichier (à transmettre par un autre canal) :");
+  if (!password) return;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await deriveKey(password, salt);
+  const payload = JSON.stringify({ title: currentNote.title, html: currentNote.html, drawing: currentNote.drawing });
+  const enc = await encryptString(key, payload);
+  const packet = { format: "noteflow-encrypted-v1", salt: bytesToB64(salt), enc };
+  const blob = new Blob([JSON.stringify(packet, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(currentNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.noteflow`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast("Fichier chiffré exporté");
+});
+
+async function importEncryptedPacket(packet) {
+  const password = window.prompt("Mot de passe pour déchiffrer ce fichier :");
+  if (!password) return 0;
+  try {
+    const key = await deriveKey(password, b64ToBytes(packet.salt));
+    const payload = JSON.parse(await decryptString(key, packet.enc));
+    const note = newNoteObject();
+    note.title = payload.title || "Note importée";
+    note.html = payload.html || "";
+    note.drawing = payload.drawing || null;
+    notes.unshift(note);
+    await persistNote(note);
+    renderList();
+    return 1;
+  } catch {
+    showToast("Mot de passe incorrect ou fichier invalide");
+    return 0;
+  }
+}
+
 newNoteBtn.addEventListener("click", async () => {
   currentNote = newNoteObject();
   notes.unshift(currentNote);
   await persistNote(currentNote);
+  playCreateSound();
   loadNoteIntoEditor();
   showEditor();
   titleInput.focus();
@@ -1119,8 +1927,20 @@ async function flushSave(immediate) {
   currentNote.tags = parseTags(tagsInput.value);
   currentNote.html = newHtml;
   currentNote.updatedAt = Date.now();
-  await persistNote(currentNote);
-  if (!immediate) saveIndicator.textContent = "Enregistré";
+  try {
+    await persistNote(currentNote);
+    if (!immediate) {
+      saveIndicator.textContent = "Enregistré";
+      saveIndicator.classList.remove("ink-dry");
+      void saveIndicator.offsetWidth;
+      saveIndicator.classList.add("ink-dry");
+      playSaveSound();
+    }
+  } catch (err) {
+    console.error("Échec de la sauvegarde", err);
+    saveIndicator.textContent = "Erreur";
+    playErrorSound();
+  }
 }
 
 titleInput.addEventListener("input", scheduleSave);
@@ -1131,12 +1951,72 @@ textEditor.addEventListener("input", () => {
   updateWordCount();
 });
 
+let lastKeystrokeTime = 0;
+let typingFastTimer = null;
+textEditor.addEventListener("input", () => {
+  const now = performance.now();
+  if (now - lastKeystrokeTime < 250) {
+    textEditor.classList.add("typing-fast");
+    clearTimeout(typingFastTimer);
+    typingFastTimer = setTimeout(() => textEditor.classList.remove("typing-fast"), 400);
+  }
+  lastKeystrokeTime = now;
+});
+
 // --- Mode switch (unified page: text vs draw) ---
 const notePage = document.getElementById("note-page");
+const bookmarkRibbonEl = document.getElementById("bookmark-ribbon");
+const pageScrollEl = document.getElementById("page-scroll");
+pageScrollEl.addEventListener("scroll", () => {
+  const max = pageScrollEl.scrollHeight - pageScrollEl.clientHeight;
+  const depth = max > 0 ? Math.min(1, pageScrollEl.scrollTop / max) : 0;
+  notePage.style.setProperty("--scroll-depth", depth.toFixed(2));
+});
 const modeTextBtn = document.getElementById("mode-text-btn");
 const modeDrawBtn = document.getElementById("mode-draw-btn");
 const drawToolbar = document.getElementById("draw-toolbar");
 const growPageBtn = document.getElementById("grow-page-btn");
+const pageFolioEl = document.getElementById("page-folio");
+
+// Easter egg: triple-tap the bottom-right corner of an empty note to fold
+// it back like a dog-eared page, revealing a short quote about writing.
+const cornerFold = document.getElementById("corner-fold");
+const WRITING_QUOTES = [
+  "« Il n'y a rien à écrire. Il n'y a qu'à s'asseoir devant une machine à écrire et saigner. » — attribué à Hemingway",
+  "« Une page blanche est un champ de bataille. » — Eugène Delacroix",
+  "« J'écris pour découvrir ce que je pense. » — Joan Didion",
+  "« Le premier jet de tout est mauvais. » — attribué à Hemingway",
+  "« Écrire, c'est réécrire. » — proverbe d'atelier",
+];
+let cornerTapTimes = [];
+let writingQuoteEl = null;
+cornerFold.addEventListener("click", () => {
+  if (textEditor.textContent.trim()) return;
+  const now = Date.now();
+  cornerTapTimes = cornerTapTimes.filter((t) => now - t < 700);
+  cornerTapTimes.push(now);
+  if (cornerTapTimes.length < 3) return;
+  cornerTapTimes = [];
+  const quote = WRITING_QUOTES[Math.floor(Math.random() * WRITING_QUOTES.length)];
+  if (!writingQuoteEl) {
+    writingQuoteEl = document.createElement("div");
+    writingQuoteEl.className = "writing-quote";
+    notePage.appendChild(writingQuoteEl);
+  }
+  writingQuoteEl.textContent = quote;
+  writingQuoteEl.classList.remove("show");
+  void writingQuoteEl.offsetWidth;
+  writingQuoteEl.classList.add("show");
+  setTimeout(() => writingQuoteEl.classList.remove("show"), 2000);
+});
+
+// Purely decorative folio number, like a bound book — only appears once the
+// page has actually been grown at least once via "+ Agrandir la page".
+function updatePageFolio() {
+  const pages = Math.round((currentNote.pageHeight || 700) / 700);
+  pageFolioEl.classList.toggle("hidden", pages <= 1);
+  pageFolioEl.textContent = pages > 1 ? String(pages) : "";
+}
 
 function setMode(mode) {
   notePage.classList.toggle("mode-text", mode === "text");
@@ -1156,7 +2036,25 @@ modeDrawBtn.addEventListener("click", () => setMode("draw"));
 // --- Focus mode ---
 const focusBtn = document.getElementById("focus-btn");
 focusBtn.addEventListener("click", () => {
-  editorScreen.classList.toggle("focus-mode");
+  const entering = editorScreen.classList.toggle("focus-mode");
+  if (entering) startAmbientFocusSound();
+  else {
+    stopAmbientFocusSound();
+    notePage.style.removeProperty("--grain-x");
+    notePage.style.removeProperty("--grain-y");
+  }
+});
+
+// The paper grain drifts a couple pixels against the cursor in focus mode —
+// like a sheet of paper on a desk, viewed from a slightly shifting angle.
+const reduceMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+document.addEventListener("mousemove", (e) => {
+  if (!editorScreen.classList.contains("focus-mode") || reduceMotionQuery.matches) return;
+  const rect = notePage.getBoundingClientRect();
+  const relX = (e.clientX - rect.left) / rect.width - 0.5;
+  const relY = (e.clientY - rect.top) / rect.height - 0.5;
+  notePage.style.setProperty("--grain-x", `${(-relX * 4).toFixed(2)}px`);
+  notePage.style.setProperty("--grain-y", `${(-relY * 4).toFixed(2)}px`);
 });
 
 // --- PIN lock ---
@@ -1166,6 +2064,8 @@ const lockInput = document.getElementById("lock-input");
 const lockError = document.getElementById("lock-error");
 const lockUnlockBtn = document.getElementById("lock-unlock-btn");
 const lockCancelBtn = document.getElementById("lock-cancel-btn");
+const lockBiometricBtn = document.getElementById("lock-biometric-btn");
+const biometricSetupBtn = document.getElementById("biometric-setup-btn");
 let pendingUnlockNoteId = null;
 
 function setLockIcon(locked) {
@@ -1212,6 +2112,115 @@ async function decryptString(key, enc) {
   return new TextDecoder().decode(plain);
 }
 
+// --- Biometric unlock (WebAuthn, PRF extension) — an additional way to
+// unlock a note already PIN-protected, never a replacement: the platform
+// authenticator's PRF output is used directly as the AES-GCM key material,
+// so the biometric itself never leaves the device and NoteFlow never
+// touches a private key. Falls back invisibly wherever unsupported.
+async function biometricSupported() {
+  return !!(
+    window.PublicKeyCredential &&
+    (await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false))
+  );
+}
+
+async function registerBiometricCredential() {
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: "NoteFlow" },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "noteflow-note", displayName: "Note NoteFlow" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+      extensions: { prf: { eval: { first: salt } } },
+    },
+  });
+  const prfResults = cred.getClientExtensionResults().prf;
+  if (!prfResults || !prfResults.enabled || !prfResults.results) {
+    throw new Error("PRF extension not supported");
+  }
+  const key = await crypto.subtle.importKey("raw", new Uint8Array(prfResults.results.first), { name: "AES-GCM" }, false, [
+    "encrypt",
+    "decrypt",
+  ]);
+  return { credentialId: bytesToB64(new Uint8Array(cred.rawId)), salt: bytesToB64(salt), key };
+}
+
+async function getBiometricKey(credentialIdB64, saltB64) {
+  const assertion = await navigator.credentials.get({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ id: b64ToBytes(credentialIdB64), type: "public-key" }],
+      userVerification: "required",
+      extensions: { prf: { eval: { first: b64ToBytes(saltB64) } } },
+    },
+  });
+  const prfResults = assertion.getClientExtensionResults().prf;
+  if (!prfResults || !prfResults.results) throw new Error("PRF result missing");
+  return crypto.subtle.importKey("raw", new Uint8Array(prfResults.results.first), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+// Biometric auth never gets its own copy of the note's content to encrypt —
+// that would silently go stale the moment the note is edited through a PIN
+// session and only the PIN-side ciphertext gets refreshed. Instead the
+// bio-derived key WRAPS (encrypts) the exact PIN-derived key bytes, so both
+// unlock paths always decrypt the one and only `encBlob`, in sync by
+// construction rather than by discipline.
+biometricSetupBtn.addEventListener("click", async () => {
+  if (!currentNote.locked || !currentNote.pinSalt || !currentNote.encBlob) {
+    showToast("Verrouille d'abord la note avec un code PIN");
+    return;
+  }
+  if (!(await biometricSupported())) {
+    showToast("Déverrouillage biométrique non disponible sur cet appareil");
+    return;
+  }
+  const pin = window.prompt("Confirme le code PIN de cette note pour activer Face ID / empreinte :");
+  if (!pin) return;
+  try {
+    const saltBytes = b64ToBytes(currentNote.pinSalt);
+    const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+    const rawBits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: saltBytes, iterations: 150000, hash: "SHA-256" }, baseKey, 256);
+    const testKey = await crypto.subtle.importKey("raw", rawBits, { name: "AES-GCM" }, false, ["decrypt"]);
+    await decryptString(testKey, currentNote.encBlob); // throws on a wrong PIN, before anything is registered
+    const { credentialId, salt, key: bioKey } = await registerBiometricCredential();
+    const wrapped = await encryptString(bioKey, bytesToB64(new Uint8Array(rawBits)));
+    currentNote.bioCredentialId = credentialId;
+    currentNote.bioSalt = salt;
+    currentNote.bioWrappedKey = wrapped;
+    await persistNote(currentNote);
+    showToast("Déverrouillage biométrique activé pour cette note");
+  } catch {
+    showToast("Code incorrect ou déverrouillage biométrique impossible");
+  }
+});
+
+lockBiometricBtn.addEventListener("click", async () => {
+  const note = notes.find((n) => n.id === pendingUnlockNoteId);
+  if (!note || !note.bioCredentialId) return;
+  try {
+    const bioKey = await getBiometricKey(note.bioCredentialId, note.bioSalt);
+    const rawKeyB64 = await decryptString(bioKey, note.bioWrappedKey);
+    const pinKey = await crypto.subtle.importKey("raw", b64ToBytes(rawKeyB64), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+    const plainBlob = JSON.parse(await decryptString(pinKey, note.encBlob));
+    lockFailCount = 0;
+    activeUnlockKey = { noteId: note.id, key: pinKey };
+    note.html = plainBlob.html || "";
+    note.drawing = plainBlob.drawing || null;
+    note.history = plainBlob.history || [];
+    await persistNote(note);
+    lockOverlay.classList.add("hidden");
+    currentNote = note;
+    if (navigator.vibrate) navigator.vibrate(15);
+    loadNoteIntoEditor();
+    showEditor();
+  } catch {
+    lockError.textContent = "Échec de la vérification biométrique";
+    lockError.classList.remove("hidden");
+  }
+});
+
 // Holds the AES key for the note currently unlocked in this session, so edits
 // keep re-encrypting on save without re-prompting for the PIN. Cleared as soon
 // as the note is no longer the open one (see showList()), so leaving the
@@ -1225,6 +2234,7 @@ function showLockOverlay() {
   lockInput.value = "";
   lockError.classList.add("hidden");
   lockOverlay.classList.remove("hidden");
+  lockBiometricBtn.classList.toggle("hidden", !currentNote.bioCredentialId);
   setTimeout(() => lockInput.focus(), 50);
 }
 
@@ -1278,6 +2288,7 @@ async function attemptUnlock() {
   await persistNote(note);
   lockOverlay.classList.add("hidden");
   currentNote = note;
+  if (navigator.vibrate) navigator.vibrate(15);
   loadNoteIntoEditor();
   showEditor();
 }
@@ -1304,6 +2315,11 @@ lockBtn.addEventListener("click", async () => {
     const key = await deriveKey(pin, salt);
     currentNote.pinSalt = bytesToB64(salt);
     currentNote.pinCode = null;
+    // A new PIN means a new key — any biometric wrap of the previous one is
+    // now stale and would silently fail; the user re-activates it if wanted.
+    currentNote.bioCredentialId = null;
+    currentNote.bioSalt = null;
+    currentNote.bioWrappedKey = null;
     currentNote.locked = true;
     activeUnlockKey = { noteId: currentNote.id, key };
     await persistNote(currentNote);
@@ -1312,6 +2328,7 @@ lockBtn.addEventListener("click", async () => {
     currentNote.html = "";
     currentNote.drawing = null;
     redrawStrokes();
+    if (navigator.vibrate) navigator.vibrate(15);
     showToast("Note verrouillée et chiffrée");
     showList();
   } else {
@@ -1338,6 +2355,9 @@ lockBtn.addEventListener("click", async () => {
     currentNote.pinSalt = null;
     currentNote.pinCode = null;
     currentNote.encBlob = null;
+    currentNote.bioCredentialId = null;
+    currentNote.bioSalt = null;
+    currentNote.bioWrappedKey = null;
     currentNote.html = plainBlob.html || "";
     currentNote.drawing = plainBlob.drawing || null;
     currentNote.history = plainBlob.history || [];
@@ -1346,6 +2366,7 @@ lockBtn.addEventListener("click", async () => {
     setLockIcon(false);
     setPressed(lockBtn, false);
     loadNoteIntoEditor();
+    if (navigator.vibrate) navigator.vibrate(15);
     showToast("Verrou retiré");
   }
 });
@@ -1403,6 +2424,49 @@ setInterval(() => {
       if (listScreen.classList.contains("active")) renderList();
     }
   });
+}, 30000);
+
+// --- Ephemeral notes: a self-destruct timer, distinct from reminders — the
+// note quietly moves itself to the trash once the delay is up (the 30-day
+// trash retention still applies, so it's never truly unrecoverable). ---
+const ephemeralBtn = document.getElementById("ephemeral-btn");
+const ephemeralPanel = document.getElementById("ephemeral-panel");
+const ephemeralClearBtn = document.getElementById("ephemeral-clear-btn");
+
+ephemeralBtn.addEventListener("click", () => {
+  reminderPanel.classList.add("hidden");
+  historyPanel.classList.add("hidden");
+  ephemeralPanel.classList.toggle("hidden");
+});
+
+document.getElementById("ephemeral-quick-row").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-hours]");
+  if (!btn) return;
+  const hours = Number(btn.dataset.hours);
+  currentNote.expiresAt = Date.now() + hours * 3600000;
+  scheduleSave();
+  ephemeralPanel.classList.add("hidden");
+  showToast(`Cette note s'effacera dans ${btn.textContent}`);
+});
+
+ephemeralClearBtn.addEventListener("click", () => {
+  currentNote.expiresAt = null;
+  scheduleSave();
+  ephemeralPanel.classList.add("hidden");
+  showToast("Expiration annulée");
+});
+
+setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+  notes.forEach((note) => {
+    if (note.expiresAt && !note.deletedAt && note.expiresAt <= now) {
+      note.deletedAt = now;
+      persistNote(note);
+      changed = true;
+    }
+  });
+  if (changed && listScreen.classList.contains("active")) renderList();
 }, 30000);
 
 // --- Version history ---
@@ -1666,6 +2730,9 @@ textEditor.addEventListener("input", () => {
   const text = node.textContent.slice(0, offset);
   const match = text.match(/\[\[([^[\]]+)\]\]$/);
   if (!match) return;
+  // A leading "!" (![[Titre]]) is transclusion, handled by a separate
+  // listener below — this one only handles a plain wikilink.
+  if (text[text.length - match[0].length - 1] === "!") return;
   const query = match[1].trim().toLowerCase();
   if (!query) return;
   const target =
@@ -1704,10 +2771,81 @@ textEditor.addEventListener("click", (e) => {
   if (notes.some((n) => n.id === id)) goToNote(id);
 });
 
+// --- Transclusion: typing ![[Titre]] embeds a read-only, refreshed-on-open
+// snapshot of that note's content right here, instead of just linking to it. ---
+function renderTransclusionBlock(el, note) {
+  el.innerHTML = "";
+  const header = document.createElement("div");
+  header.className = "transclusion-header";
+  header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
+  const body = document.createElement("div");
+  body.className = "transclusion-body";
+  body.innerHTML = note.locked ? "<p><em>Cette note est verrouillée.</em></p>" : note.html || "<p><em>Note vide.</em></p>";
+  el.appendChild(header);
+  el.appendChild(body);
+}
+
+function insertTransclusionBlock(target) {
+  const div = document.createElement("div");
+  div.className = "transclusion";
+  div.contentEditable = "false";
+  div.dataset.noteId = target.id;
+  renderTransclusionBlock(div, target);
+  return div;
+}
+
+// Every embedded transclusion is refreshed from the current state of its
+// source note whenever the containing note is (re)opened — not truly live
+// while both are open at once, but never stale on view.
+function refreshTransclusions() {
+  textEditor.querySelectorAll(".transclusion[data-note-id]").forEach((el) => {
+    const source = notes.find((n) => n.id === el.dataset.noteId && !n.deletedAt);
+    if (!source) {
+      el.innerHTML = '<div class="transclusion-header">↳ Note source introuvable (supprimée)</div>';
+      return;
+    }
+    renderTransclusionBlock(el, source);
+  });
+}
+
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = sel.getRangeAt(0).startOffset;
+  const text = node.textContent.slice(0, offset);
+  const match = text.match(/!\[\[([^[\]]+)\]\]$/);
+  if (!match) return;
+  const query = match[1].trim().toLowerCase();
+  if (!query) return;
+  const target =
+    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+  if (!target) return;
+  const full = match[0];
+  const range = document.createRange();
+  try {
+    range.setStart(node, offset - full.length);
+    range.setEnd(node, offset);
+    range.deleteContents();
+    const block = insertTransclusionBlock(target);
+    range.insertNode(block);
+    const p = document.createElement("p");
+    p.innerHTML = "<br>";
+    block.after(p);
+    placeCaretAtStart(p);
+    scheduleSave();
+  } catch {
+    /* selection edge case: skip silently */
+  }
+});
+
 growPageBtn.addEventListener("click", () => {
   currentNote.pageHeight = (currentNote.pageHeight || 700) + 400;
   notePage.style.minHeight = currentNote.pageHeight + "px";
   textEditor.style.minHeight = currentNote.pageHeight + "px";
+  updatePageFolio();
   initCanvasSize();
   redrawStrokes();
   scheduleSave();
@@ -1952,6 +3090,63 @@ imageInput.addEventListener("change", () => {
   imageInput.value = "";
 });
 
+// --- Voice notes (MediaRecorder, 100% local — the audio is stored as a
+// data URL right inside the note's html, exactly like a pasted image). ---
+const voiceNoteBtn = document.getElementById("voice-note-btn");
+let activeRecorder = null;
+let audioChunks = [];
+
+function setVoiceBtnRecording(recording) {
+  setPressed(voiceNoteBtn, recording);
+  voiceNoteBtn.title = recording ? "Arrêter l'enregistrement" : "Enregistrer une note vocale";
+}
+
+voiceNoteBtn.addEventListener("click", async () => {
+  if (activeRecorder && activeRecorder.state === "recording") {
+    activeRecorder.stop();
+    return;
+  }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    showToast("Enregistrement audio non disponible sur ce navigateur");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    activeRecorder = new MediaRecorder(stream);
+    activeRecorder.addEventListener("dataavailable", (e) => {
+      if (e.data.size) audioChunks.push(e.data);
+    });
+    activeRecorder.addEventListener("stop", () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(audioChunks, { type: "audio/webm" });
+      const reader = new FileReader();
+      reader.onload = () => {
+        restoreSelection();
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.src = reader.result;
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
+          const range = sel.getRangeAt(0);
+          range.collapse(false);
+          range.insertNode(audio);
+        } else {
+          textEditor.appendChild(audio);
+        }
+        scheduleSave();
+        setVoiceBtnRecording(false);
+      };
+      reader.readAsDataURL(blob);
+    });
+    activeRecorder.start();
+    setVoiceBtnRecording(true);
+    showToast("Enregistrement en cours… touche à nouveau pour arrêter");
+  } catch {
+    showToast("Micro indisponible ou accès refusé");
+  }
+});
+
 textEditor.addEventListener("paste", (e) => {
   const items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
@@ -1961,6 +3156,142 @@ textEditor.addEventListener("paste", (e) => {
       insertImageFile(item.getAsFile());
       return;
     }
+  }
+});
+
+// --- OCR (photo -> texte), chargé à la demande depuis un CDN pour ne pas
+// alourdir le chargement initial de l'app avec un moteur de reconnaissance
+// de plusieurs Mo. ---
+const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+const ocrBtn = document.getElementById("ocr-btn");
+const ocrInput = document.getElementById("ocr-input");
+let tesseractWorkerPromise = null;
+
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = TESSERACT_CDN;
+    script.onload = () => resolve(window.Tesseract);
+    script.onerror = () => reject(new Error("Tesseract CDN unreachable"));
+    document.head.appendChild(script);
+  });
+}
+
+function getTesseractWorker() {
+  if (!tesseractWorkerPromise) {
+    tesseractWorkerPromise = loadTesseract().then((Tesseract) => Tesseract.createWorker("fra"));
+  }
+  return tesseractWorkerPromise;
+}
+
+function insertTextAtCursor(text) {
+  restoreSelection();
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
+    const range = sel.getRangeAt(0);
+    range.collapse(false);
+    range.insertNode(document.createTextNode(text));
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    textEditor.appendChild(document.createTextNode(text));
+  }
+  scheduleSave();
+}
+
+ocrBtn.addEventListener("click", () => {
+  ocrInput.click();
+});
+
+ocrInput.addEventListener("change", async () => {
+  const file = ocrInput.files[0];
+  ocrInput.value = "";
+  if (!file) return;
+  ocrBtn.classList.add("busy-guard");
+  showToast("Lecture du texte de la photo…");
+  try {
+    const worker = await getTesseractWorker();
+    const { data } = await worker.recognize(file);
+    const text = (data.text || "").trim();
+    if (!text) {
+      showToast("Aucun texte détecté sur cette photo");
+    } else {
+      insertTextAtCursor(text);
+      showToast("Texte extrait et ajouté à la note");
+    }
+  } catch {
+    showToast("OCR indisponible (connexion requise pour charger le moteur)");
+  } finally {
+    ocrBtn.classList.remove("busy-guard");
+  }
+});
+
+// --- Scan QR code / code-barres, chargé à la demande depuis un CDN. ---
+const JSQR_CDN = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+const scanCodeBtn = document.getElementById("scan-code-btn");
+const scanCodeInput = document.getElementById("scan-code-input");
+let jsQRPromise = null;
+
+function loadJsQR() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  if (!jsQRPromise) {
+    jsQRPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = JSQR_CDN;
+      script.onload = () => resolve(window.jsQR);
+      script.onerror = () => reject(new Error("jsQR CDN unreachable"));
+      document.head.appendChild(script);
+    });
+  }
+  return jsQRPromise;
+}
+
+function looksLikeUrl(text) {
+  return /^https?:\/\//i.test(text.trim());
+}
+
+scanCodeBtn.addEventListener("click", () => {
+  scanCodeInput.click();
+});
+
+scanCodeInput.addEventListener("change", async () => {
+  const file = scanCodeInput.files[0];
+  scanCodeInput.value = "";
+  if (!file) return;
+  scanCodeBtn.classList.add("busy-guard");
+  try {
+    const jsQR = await loadJsQR();
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+    const img = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = reject;
+      image.src = dataUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx2d = canvas.getContext("2d");
+    ctx2d.drawImage(img, 0, 0);
+    const imageData = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
+    const result = jsQR(imageData.data, imageData.width, imageData.height);
+    if (!result || !result.data) {
+      showToast("Aucun QR code détecté sur cette photo");
+    } else {
+      const value = result.data;
+      insertTextAtCursor(value);
+      showToast(looksLikeUrl(value) ? "Lien détecté et ajouté à la note" : "Contenu du code ajouté à la note");
+    }
+  } catch {
+    showToast("Scan indisponible (connexion requise pour charger le moteur)");
+  } finally {
+    scanCodeBtn.classList.remove("busy-guard");
   }
 });
 
@@ -2354,6 +3685,7 @@ function renderColorRow() {
       setPressed(eraserBtn, false);
       colorRow.querySelectorAll(".color-swatch").forEach((s) => s.classList.remove("selected"));
       swatch.classList.add("selected");
+      updateDrawCursor();
     });
     colorRow.appendChild(swatch);
   });
@@ -2380,6 +3712,7 @@ function updateWidthUI() {
   const dotSize = Math.min(Math.max(drawWidth, 4), 28);
   widthPreviewDot.style.width = dotSize + "px";
   widthPreviewDot.style.height = dotSize + "px";
+  updateDrawCursor();
 }
 updateWidthUI();
 
@@ -2389,6 +3722,21 @@ widthSlider.addEventListener("input", () => {
   toolWidths[tool] = drawWidth;
   updateWidthUI();
 });
+
+// The mouse cursor itself becomes a small swatch of the current tool's
+// color/size while drawing, instead of a generic crosshair — a contextual
+// pen that shows exactly what the next stroke will look like.
+function updateDrawCursor() {
+  const size = Math.max(6, Math.min(drawWidth, 36));
+  const dim = Math.round(size + 6);
+  const half = dim / 2;
+  const fill = isErasing ? "none" : drawColor;
+  const strokeColor = isErasing ? "#8a8a8a" : "rgba(0,0,0,0.4)";
+  const fillOpacity = isHighlighting ? 0.45 : 0.85;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${dim}" height="${dim}"><circle cx="${half}" cy="${half}" r="${size / 2}" fill="${fill}" fill-opacity="${fillOpacity}" stroke="${strokeColor}" stroke-width="1.5"/></svg>`;
+  const b64 = btoa(svg);
+  canvas.style.cursor = `url("data:image/svg+xml;base64,${b64}") ${half} ${half}, crosshair`;
+}
 
 eraserBtn.addEventListener("click", () => {
   setTool(isErasing ? "pen" : "eraser");
@@ -2714,7 +4062,7 @@ document.addEventListener("keydown", (e) => {
       lockCancelBtn.click();
       return;
     }
-    [reminderPanel, historyPanel, backlinksPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
+    [reminderPanel, historyPanel, backlinksPanel, ephemeralPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
   }
 
   const mod = e.metaKey || e.ctrlKey;
@@ -2873,6 +4221,34 @@ cmdkInput.addEventListener("keydown", (e) => {
   }
 });
 
+// --- Réception de partage entrant (Web Share Target API) ---
+// D'autres apps (navigateur, Notes, Photos…) peuvent "Partager vers NoteFlow" ;
+// le système ouvre alors index.html avec ces paramètres de requête (voir
+// manifest.json > share_target). On les convertit en une nouvelle note puis
+// on nettoie l'URL pour ne pas recréer la note à chaque rechargement.
+async function handleIncomingShare() {
+  const params = new URLSearchParams(window.location.search);
+  const sharedTitle = params.get("shared_title");
+  const sharedText = params.get("shared_text");
+  const sharedUrl = params.get("shared_url");
+  if (!sharedTitle && !sharedText && !sharedUrl) return;
+
+  window.history.replaceState({}, "", window.location.pathname);
+
+  const note = newNoteObject();
+  note.title = sharedTitle || "";
+  const bodyParts = [];
+  if (sharedText) bodyParts.push(`<p>${escapeHtml(sharedText)}</p>`);
+  if (sharedUrl) bodyParts.push(`<p><a href="${escapeHtml(sharedUrl)}">${escapeHtml(sharedUrl)}</a></p>`);
+  note.html = bodyParts.join("");
+  notes.unshift(note);
+  await persistNote(note);
+  currentNote = note;
+  loadNoteIntoEditor();
+  showEditor();
+  showToast("Contenu partagé ajouté à une nouvelle note");
+}
+
 // --- Init ---
 (async () => {
   try {
@@ -2884,6 +4260,7 @@ cmdkInput.addEventListener("keydown", (e) => {
     showToast("Impossible de charger tes notes locales (stockage indisponible ou navigation privée)");
   }
   showList();
+  await handleIncomingShare();
   initSyncFromStorage();
 })();
 
