@@ -525,31 +525,145 @@ exportBtn.addEventListener("click", () => {
 
 importBtn.addEventListener("click", () => importInput.click());
 
+// iCalendar (.ics) and vCard (.vcf) both fold long lines with a leading
+// space/tab continuation — unfold before parsing either format.
+function unfoldTextLines(text) {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .reduce((acc, line) => {
+      if ((line.startsWith(" ") || line.startsWith("\t")) && acc.length) {
+        acc[acc.length - 1] += line.slice(1);
+      } else {
+        acc.push(line);
+      }
+      return acc;
+    }, []);
+}
+
+function parseIcsDate(value) {
+  const m = value.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2}))?/);
+  if (!m) return null;
+  const [, y, mo, d, h = "00", mi = "00", s = "00"] = m;
+  return new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s));
+}
+
+async function importIcs(text) {
+  const lines = unfoldTextLines(text);
+  let count = 0;
+  let current = null;
+  for (const line of lines) {
+    if (line.startsWith("BEGIN:VEVENT")) {
+      current = {};
+      continue;
+    }
+    if (line.startsWith("END:VEVENT")) {
+      if (current) {
+        const note = newNoteObject();
+        note.title = current.summary || "Événement";
+        note.folder = "Calendrier";
+        const parts = [];
+        if (current.dtstart) parts.push(`<p><strong>Début :</strong> ${current.dtstart.toLocaleString("fr-FR")}</p>`);
+        if (current.dtend) parts.push(`<p><strong>Fin :</strong> ${current.dtend.toLocaleString("fr-FR")}</p>`);
+        if (current.location) parts.push(`<p><strong>Lieu :</strong> ${escapeHtml(current.location)}</p>`);
+        if (current.description) parts.push(`<p>${escapeHtml(current.description).replace(/\\n/g, "<br>")}</p>`);
+        note.html = parts.join("") || "<p><em>Aucun détail.</em></p>";
+        notes.unshift(note);
+        await persistNote(note);
+        count++;
+      }
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).split(";")[0].toUpperCase();
+    const value = line.slice(idx + 1);
+    if (key === "SUMMARY") current.summary = value;
+    else if (key === "LOCATION") current.location = value;
+    else if (key === "DESCRIPTION") current.description = value;
+    else if (key === "DTSTART") current.dtstart = parseIcsDate(value);
+    else if (key === "DTEND") current.dtend = parseIcsDate(value);
+  }
+  renderList();
+  return count;
+}
+
+async function importVcf(text) {
+  const lines = unfoldTextLines(text);
+  let count = 0;
+  let current = null;
+  for (const line of lines) {
+    if (line.startsWith("BEGIN:VCARD")) {
+      current = {};
+      continue;
+    }
+    if (line.startsWith("END:VCARD")) {
+      if (current) {
+        const note = newNoteObject();
+        note.title = current.fn || "Contact";
+        note.folder = "Contacts";
+        const parts = [];
+        if (current.tel) parts.push(`<p><strong>Téléphone :</strong> ${escapeHtml(current.tel)}</p>`);
+        if (current.email) parts.push(`<p><strong>Email :</strong> ${escapeHtml(current.email)}</p>`);
+        if (current.org) parts.push(`<p><strong>Organisation :</strong> ${escapeHtml(current.org)}</p>`);
+        note.html = parts.join("") || "<p><em>Aucune information supplémentaire.</em></p>";
+        notes.unshift(note);
+        await persistNote(note);
+        count++;
+      }
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).split(";")[0].toUpperCase();
+    const value = line.slice(idx + 1);
+    if (key === "FN") current.fn = value;
+    else if (key === "TEL") current.tel = value;
+    else if (key === "EMAIL") current.email = value;
+    else if (key === "ORG") current.org = value.replace(/;/g, " · ");
+  }
+  renderList();
+  return count;
+}
+
 importInput.addEventListener("change", async () => {
   const file = importInput.files[0];
   if (!file) return;
+  const name = file.name.toLowerCase();
   try {
-    const text = await file.text();
-    const parsed = JSON.parse(text);
-    // A single-note export (see "Exporter cette note") is a plain object,
-    // not an array — accept both.
-    const imported = Array.isArray(parsed) ? parsed : [parsed];
-    let added = 0;
-    let updated = 0;
-    for (const note of imported) {
-      if (!note || !note.id) continue;
-      const index = notes.findIndex((n) => n.id === note.id);
-      if (index === -1) {
-        notes.push(note);
-        added++;
-      } else if ((note.updatedAt || 0) > (notes[index].updatedAt || 0)) {
-        notes[index] = note;
-        updated++;
+    if (name.endsWith(".ics")) {
+      const count = await importIcs(await file.text());
+      showToast(`${count} note${count > 1 ? "s" : ""} importée${count > 1 ? "s" : ""} depuis le calendrier`);
+    } else if (name.endsWith(".vcf")) {
+      const count = await importVcf(await file.text());
+      showToast(`${count} note${count > 1 ? "s" : ""} importée${count > 1 ? "s" : ""} depuis les contacts`);
+    } else {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      // A single-note export (see "Exporter cette note") is a plain object,
+      // not an array — accept both.
+      const imported = Array.isArray(parsed) ? parsed : [parsed];
+      let added = 0;
+      let updated = 0;
+      for (const note of imported) {
+        if (!note || !note.id) continue;
+        const index = notes.findIndex((n) => n.id === note.id);
+        if (index === -1) {
+          notes.push(note);
+          added++;
+        } else if ((note.updatedAt || 0) > (notes[index].updatedAt || 0)) {
+          notes[index] = note;
+          updated++;
+        }
+        await persistNote(note);
       }
-      await persistNote(note);
+      renderList();
+      showToast(`Import terminé : ${added} ajoutée(s), ${updated} mise(s) à jour`);
     }
-    renderList();
-    showToast(`Import terminé : ${added} ajoutée(s), ${updated} mise(s) à jour`);
   } catch (err) {
     showToast("Import impossible : fichier invalide");
   }
