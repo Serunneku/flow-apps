@@ -69,6 +69,7 @@ let notes = [];
 let currentNote = null;
 let searchQuery = "";
 let activeFolderFilter = null;
+let activeTagFilter = null;
 let listView = "active"; // "active" | "archived" | "trash"
 let selectionMode = false;
 let selectedIds = new Set();
@@ -117,24 +118,43 @@ updateStreakBadge();
 function setupMenu(btnId, panelId) {
   const btn = document.getElementById(btnId);
   const panel = document.getElementById(panelId);
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.setAttribute("aria-expanded", "false");
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     const willOpen = panel.classList.contains("hidden");
     document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
-    if (willOpen) panel.classList.remove("hidden");
+    document.querySelectorAll(".menu-wrap .icon-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+    if (willOpen) {
+      panel.classList.remove("hidden");
+      btn.setAttribute("aria-expanded", "true");
+    }
   });
   panel.addEventListener("click", (e) => {
-    if (e.target.closest(".menu-item")) panel.classList.add("hidden");
+    if (e.target.closest(".menu-item")) {
+      panel.classList.add("hidden");
+      btn.setAttribute("aria-expanded", "false");
+    }
   });
   return panel;
 }
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".menu-wrap")) {
     document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+    document.querySelectorAll(".menu-wrap .icon-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
   }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+  if (e.key === "Escape") {
+    document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
+    document.querySelectorAll(".menu-wrap .icon-btn[aria-expanded]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+  }
+});
+
+// Every icon-only button that has a hover title but no explicit aria-label
+// gets one automatically, so screen readers announce it (not just mouse hover).
+document.querySelectorAll("button[title]:not([aria-label])").forEach((btn) => {
+  btn.setAttribute("aria-label", btn.getAttribute("title"));
 });
 setupMenu("list-menu-btn", "list-menu");
 setupMenu("editor-menu-btn", "editor-menu");
@@ -220,17 +240,27 @@ document.addEventListener("mousedown", (e) => {
   if (e.target.closest(".custom-select-trigger, .custom-select-option")) e.preventDefault();
 });
 
+function setPressed(el, state) {
+  el.classList.toggle("active", state);
+  el.setAttribute("aria-pressed", String(!!state));
+}
+
 // --- Toast (with optional undo) ---
 const toastEl = document.getElementById("toast");
 const toastText = document.getElementById("toast-text");
 const toastUndo = document.getElementById("toast-undo");
 let toastTimer = null;
 
-function showToast(message, onUndo) {
+let toastIsUndoable = false;
+
+function showToast(message, onUndo, options) {
+  const { actionLabel, ctrlZ = true } = options || {};
   clearTimeout(toastTimer);
   toastText.textContent = message;
+  toastUndo.textContent = actionLabel || "Annuler";
   toastUndo.classList.toggle("hidden", !onUndo);
   toastEl.classList.remove("hidden");
+  toastIsUndoable = !!onUndo && ctrlZ;
   toastUndo.onclick = () => {
     if (onUndo) onUndo();
     toastEl.classList.add("hidden");
@@ -240,7 +270,7 @@ function showToast(message, onUndo) {
 }
 
 function triggerToastUndo() {
-  if (toastEl.classList.contains("hidden") || toastUndo.classList.contains("hidden")) return false;
+  if (toastEl.classList.contains("hidden") || toastUndo.classList.contains("hidden") || !toastIsUndoable) return false;
   toastUndo.onclick();
   return true;
 }
@@ -250,6 +280,15 @@ const listScreen = document.getElementById("list-screen");
 const editorScreen = document.getElementById("editor-screen");
 
 function showList() {
+  // Leaving a locked note's editor always re-locks it in memory too: its
+  // plaintext body/drawing/history are dropped and the unlock key forgotten,
+  // so reopening it requires the PIN again, exactly like before encryption.
+  if (currentNote && currentNote.locked && activeUnlockKey && activeUnlockKey.noteId === currentNote.id) {
+    currentNote.html = "";
+    currentNote.drawing = null;
+    currentNote.history = [];
+    activeUnlockKey = null;
+  }
   listScreen.classList.add("active");
   editorScreen.classList.remove("active");
   renderList();
@@ -297,8 +336,10 @@ importInput.addEventListener("change", async () => {
   if (!file) return;
   try {
     const text = await file.text();
-    const imported = JSON.parse(text);
-    if (!Array.isArray(imported)) throw new Error("format invalide");
+    const parsed = JSON.parse(text);
+    // A single-note export (see "Exporter cette note") is a plain object,
+    // not an array — accept both.
+    const imported = Array.isArray(parsed) ? parsed : [parsed];
     let added = 0;
     let updated = 0;
     for (const note of imported) {
@@ -327,6 +368,18 @@ function stripHtml(html) {
   return (div.textContent || "").trim();
 }
 
+// Parsing HTML for a text preview is the costliest part of rendering the list
+// (worse with inline base64 images); cache it per note and only recompute
+// when the note's html actually changed since the last render.
+const previewCache = new Map();
+function getPreview(note) {
+  const cached = previewCache.get(note.id);
+  if (cached && cached.html === note.html) return cached.text;
+  const text = stripHtml(note.html);
+  previewCache.set(note.id, { html: note.html, text });
+  return text;
+}
+
 function timeAgo(ts) {
   const diff = Date.now() - ts;
   const min = Math.floor(diff / 60000);
@@ -349,6 +402,10 @@ function allFolders() {
   return [...new Set(notes.map((n) => n.folder).filter(Boolean))];
 }
 
+function allTags() {
+  return [...new Set(notes.flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
+}
+
 let draggedNoteId = null;
 
 function reorderNotes(targetId) {
@@ -366,14 +423,25 @@ function reorderNotes(targetId) {
 }
 
 function renderFolderFilters() {
-  const folders = allFolders();
-  folderFiltersEl.classList.toggle("hidden", folders.length === 0);
+  // Folders support "Parent/Enfant" paths: sorting alphabetically naturally
+  // groups a parent next to its children, and selecting a parent also shows
+  // notes filed one level (or more) below it — a lightweight hierarchy
+  // without needing a full collapsible tree widget. Tag chips follow the
+  // folder chips in the same row and combine with the folder filter (both
+  // can be active together) rather than replacing it.
+  const folders = allFolders().sort((a, b) => a.localeCompare(b, "fr"));
+  const tags = allTags();
+  folderFiltersEl.classList.toggle("hidden", folders.length === 0 && tags.length === 0);
   folderFiltersEl.innerHTML = "";
   folders.forEach((folder) => {
+    const parts = folder.split("/");
+    const depth = parts.length - 1;
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "tag-filter-chip" + (activeFolderFilter === folder ? " active" : "");
-    chip.textContent = folder;
+    if (depth > 0) chip.style.marginLeft = `${depth * 14}px`;
+    chip.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
+    chip.title = folder;
     chip.addEventListener("click", () => {
       activeFolderFilter = activeFolderFilter === folder ? null : folder;
       renderList();
@@ -388,6 +456,17 @@ function renderFolderFilters() {
         persistNote(note);
         renderList();
       }
+    });
+    folderFiltersEl.appendChild(chip);
+  });
+  tags.forEach((tag) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "tag-filter-chip tag-chip" + (activeTagFilter === tag ? " active" : "");
+    chip.textContent = "#" + tag;
+    chip.addEventListener("click", () => {
+      activeTagFilter = activeTagFilter === tag ? null : tag;
+      renderList();
     });
     folderFiltersEl.appendChild(chip);
   });
@@ -416,6 +495,7 @@ const VIEW_LABEL = { archived: "Archives", trash: "Corbeille" };
 function setListView(view) {
   listView = view;
   activeFolderFilter = null;
+  activeTagFilter = null;
   viewBanner.classList.toggle("hidden", view === "active");
   viewBannerTitle.textContent = VIEW_LABEL[view] || "";
   renderList();
@@ -513,9 +593,23 @@ function renderList() {
     if (listView === "trash" && !n.deletedAt) return false;
     if (listView === "archived" && (!n.archived || n.deletedAt)) return false;
     if (listView === "active" && (n.archived || n.deletedAt)) return false;
-    if (activeFolderFilter && n.folder !== activeFolderFilter) return false;
+    if (
+      activeFolderFilter &&
+      n.folder !== activeFolderFilter &&
+      !(n.folder || "").startsWith(activeFolderFilter + "/")
+    )
+      return false;
+    if (activeTagFilter && !(n.tags || []).includes(activeTagFilter)) return false;
     if (query) {
-      const haystack = (n.title + " " + (n.folder || "") + " " + (n.locked ? "" : stripHtml(n.html))).toLowerCase();
+      const haystack = (
+        n.title +
+        " " +
+        (n.folder || "") +
+        " " +
+        (n.tags || []).join(" ") +
+        " " +
+        (n.locked ? "" : getPreview(n))
+      ).toLowerCase();
       if (!haystack.includes(query)) return false;
     }
     return true;
@@ -533,12 +627,13 @@ function renderList() {
   notesListEl.innerHTML = "";
   notesEmptyEl.classList.toggle("show", visible.length === 0);
 
-  visible.forEach((note) => {
+  visible.forEach((note, index) => {
     const li = document.createElement("li");
-    li.className = "note-item";
+    li.className = "note-item note-in";
+    li.style.animationDelay = `${Math.min(index, 12) * 28}ms`;
     const preview = note.locked
       ? "Note verrouillée"
-      : stripHtml(note.html) || (note.drawing && note.drawing.strokes.length ? "Dessin" : "Note vide");
+      : getPreview(note) || (note.drawing && note.drawing.strokes.length ? "Dessin" : "Note vide");
     const badges =
       (note.pinned ? '<svg class="icon note-badge"><use href="#icon-pin"/></svg>' : "") +
       (note.locked ? '<svg class="icon note-badge"><use href="#icon-lock-closed"/></svg>' : "");
@@ -579,6 +674,12 @@ function renderList() {
       chip.textContent = note.folder;
       li.querySelector(".note-meta").appendChild(chip);
     }
+    (note.tags || []).forEach((tag) => {
+      const chip = document.createElement("span");
+      chip.className = "note-tag-chip";
+      chip.textContent = "#" + tag;
+      li.querySelector(".note-meta").appendChild(chip);
+    });
     const checkbox = li.querySelector(".note-select-checkbox");
     checkbox.checked = selectedIds.has(note.id);
     li.classList.toggle("selected", selectedIds.has(note.id));
@@ -632,9 +733,13 @@ function renderList() {
   });
 }
 
+let searchDebounceTimer = null;
 searchInput.addEventListener("input", () => {
-  searchQuery = searchInput.value;
-  renderList();
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    searchQuery = searchInput.value;
+    renderList();
+  }, 150);
 });
 
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -690,6 +795,7 @@ async function purgeOldTrash() {
 // --- Editor ---
 const titleInput = document.getElementById("title-input");
 const folderInput = document.getElementById("folder-input");
+const tagsInput = document.getElementById("tags-input");
 const textEditor = document.getElementById("text-editor");
 const backBtn = document.getElementById("back-btn");
 const pinBtn = document.getElementById("pin-btn");
@@ -708,6 +814,7 @@ function newNoteObject() {
     title: "",
     html: "",
     folder: "",
+    tags: [],
     pinned: false,
     createdAt: now,
     updatedAt: now,
@@ -717,6 +824,8 @@ function newNoteObject() {
     fontSize: 15,
     locked: false,
     pinCode: null,
+    pinSalt: null,
+    encBlob: null,
     reminderAt: null,
     reminderFired: false,
     history: [],
@@ -745,13 +854,18 @@ async function openNote(id) {
   showEditor();
 }
 
+function parseTags(raw) {
+  return [...new Set((raw || "").split(/[,#]/).map((t) => t.trim()).filter(Boolean))];
+}
+
 function loadNoteIntoEditor() {
   titleInput.value = currentNote.title || "";
   folderInput.value = currentNote.folder || "";
+  tagsInput.value = (currentNote.tags || []).join(", ");
   textEditor.innerHTML = currentNote.html || "";
-  pinBtn.classList.toggle("active", !!currentNote.pinned);
+  setPressed(pinBtn, !!currentNote.pinned);
   setLockIcon(!!currentNote.locked);
-  lockBtn.classList.toggle("active", !!currentNote.locked);
+  setPressed(lockBtn, !!currentNote.locked);
   saveIndicator.textContent = "";
   notePage.style.minHeight = (currentNote.pageHeight || 700) + "px";
   textEditor.style.minHeight = (currentNote.pageHeight || 700) + "px";
@@ -760,6 +874,7 @@ function loadNoteIntoEditor() {
   if (sizeSelect._customSelectRefresh) sizeSelect._customSelectRefresh();
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
+  backlinksPanel.classList.add("hidden");
   colorPanel.classList.add("hidden");
   paperPanel.classList.add("hidden");
   findPanel.classList.add("hidden");
@@ -789,6 +904,10 @@ sizeSelect.addEventListener("change", () => {
 });
 
 duplicateNoteBtn.addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour la dupliquer");
+    return;
+  }
   flushSave(true);
   const copy = JSON.parse(JSON.stringify(currentNote));
   copy.id = crypto.randomUUID();
@@ -802,6 +921,45 @@ duplicateNoteBtn.addEventListener("click", async () => {
   currentNote = copy;
   loadNoteIntoEditor();
   showToast("Note dupliquée");
+});
+
+// --- Share / export a single note ---
+document.getElementById("share-note-btn").addEventListener("click", async () => {
+  const title = titleInput.value.trim() || "Note NoteFlow";
+  const text = (titleInput.value.trim() ? title + "\n\n" : "") + textEditor.textContent.trim();
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text });
+    } catch {
+      /* user cancelled the native share sheet: nothing to do */
+    }
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    showToast("Copié dans le presse-papiers");
+  } else {
+    showToast("Partage non disponible sur ce navigateur");
+  }
+});
+
+async function noteForExport(note) {
+  if (note.locked && activeUnlockKey && activeUnlockKey.noteId === note.id) {
+    const blob = JSON.stringify({ html: note.html, drawing: note.drawing, history: note.history });
+    const enc = await encryptString(activeUnlockKey.key, blob);
+    return { ...note, html: "", drawing: null, history: [], encBlob: enc };
+  }
+  return note;
+}
+
+document.getElementById("export-note-btn").addEventListener("click", async () => {
+  await flushSave(true);
+  const exportNote = await noteForExport(currentNote);
+  const blob = new Blob([JSON.stringify(exportNote, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(exportNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 });
 
 newNoteBtn.addEventListener("click", async () => {
@@ -820,7 +978,7 @@ backBtn.addEventListener("click", () => {
 
 pinBtn.addEventListener("click", () => {
   currentNote.pinned = !currentNote.pinned;
-  pinBtn.classList.toggle("active", currentNote.pinned);
+  setPressed(pinBtn, currentNote.pinned);
   scheduleSave();
 });
 
@@ -929,9 +1087,20 @@ function scheduleSave() {
   saveTimer = setTimeout(() => flushSave(false), 500);
 }
 
+// Version history keeps up to 20 full-text snapshots per note. Base64 images
+// inline in the html would get duplicated in every single one of them, so
+// history snapshots keep the text/formatting but drop embedded images
+// (restoring an old version restores the text; the current images stay put).
+function stripImagesForHistory(html) {
+  const div = document.createElement("div");
+  div.innerHTML = html || "";
+  div.querySelectorAll("img").forEach((img) => img.remove());
+  return div.innerHTML;
+}
+
 function pushHistorySnapshot() {
   if (!currentNote.history) currentNote.history = [];
-  currentNote.history.push({ title: currentNote.title, html: currentNote.html, ts: Date.now() });
+  currentNote.history.push({ title: currentNote.title, html: stripImagesForHistory(currentNote.html), ts: Date.now() });
   if (currentNote.history.length > 20) currentNote.history.shift();
 }
 
@@ -945,6 +1114,7 @@ async function flushSave(immediate) {
   }
   currentNote.title = newTitle;
   currentNote.folder = folderInput.value.trim();
+  currentNote.tags = parseTags(tagsInput.value);
   currentNote.html = newHtml;
   currentNote.updatedAt = Date.now();
   await persistNote(currentNote);
@@ -953,6 +1123,7 @@ async function flushSave(immediate) {
 
 titleInput.addEventListener("input", scheduleSave);
 folderInput.addEventListener("change", scheduleSave);
+tagsInput.addEventListener("change", scheduleSave);
 textEditor.addEventListener("input", () => {
   scheduleSave();
   updateWordCount();
@@ -968,8 +1139,8 @@ const growPageBtn = document.getElementById("grow-page-btn");
 function setMode(mode) {
   notePage.classList.toggle("mode-text", mode === "text");
   notePage.classList.toggle("mode-draw", mode === "draw");
-  modeTextBtn.classList.toggle("active", mode === "text");
-  modeDrawBtn.classList.toggle("active", mode === "draw");
+  setPressed(modeTextBtn, mode === "text");
+  setPressed(modeDrawBtn, mode === "draw");
   document.getElementById("format-toolbar").classList.toggle("hidden", mode !== "text");
   drawToolbar.classList.toggle("hidden", mode !== "draw");
   drawHint.classList.toggle("hidden", mode !== "draw");
@@ -999,11 +1170,53 @@ function setLockIcon(locked) {
   lockBtn.innerHTML = `<svg class="icon"><use href="#icon-lock-${locked ? "closed" : "open"}"/></svg>`;
 }
 
+// --- Real encryption for locked notes (AES-GCM, key derived from the PIN via
+// PBKDF2). `pinCode` (a bare SHA-256 hash) only exists on notes locked before
+// this scheme: it verifies the PIN once, then the note is migrated in place.
 async function hashPin(pin) {
   const data = new TextEncoder().encode(pin);
   const digest = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+function bytesToB64(bytes) {
+  let bin = "";
+  bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin);
+}
+function b64ToBytes(b64) {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+async function deriveKey(pin, saltBytes) {
+  const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: saltBytes, iterations: 150000, hash: "SHA-256" },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptString(key, plaintext) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext));
+  return { iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(data)) };
+}
+
+async function decryptString(key, enc) {
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(enc.iv) }, key, b64ToBytes(enc.data));
+  return new TextDecoder().decode(plain);
+}
+
+// Holds the AES key for the note currently unlocked in this session, so edits
+// keep re-encrypting on save without re-prompting for the PIN. Cleared as soon
+// as the note is no longer the open one (see showList()), so leaving the
+// editor always requires the PIN again next time, exactly like before.
+let activeUnlockKey = null;
+let lockFailCount = 0;
+let lockLockedUntil = 0;
 
 function showLockOverlay() {
   pendingUnlockNoteId = currentNote.id;
@@ -1016,17 +1229,55 @@ function showLockOverlay() {
 async function attemptUnlock() {
   const note = notes.find((n) => n.id === pendingUnlockNoteId);
   if (!note) return;
-  const hash = await hashPin(lockInput.value);
-  if (hash === note.pinCode) {
-    lockOverlay.classList.add("hidden");
-    currentNote = note;
-    loadNoteIntoEditor();
-    showEditor();
-  } else {
+  if (Date.now() < lockLockedUntil) {
+    lockError.textContent = `Trop de tentatives, réessaie dans ${Math.ceil((lockLockedUntil - Date.now()) / 1000)}s`;
+    lockError.classList.remove("hidden");
+    return;
+  }
+  const pin = lockInput.value;
+  let key = null;
+  let plainBlob = null;
+  try {
+    if (note.pinSalt && note.encBlob) {
+      key = await deriveKey(pin, b64ToBytes(note.pinSalt));
+      plainBlob = JSON.parse(await decryptString(key, note.encBlob));
+    } else if (note.pinCode) {
+      const hash = await hashPin(pin);
+      if (hash !== note.pinCode) throw new Error("wrong pin");
+      // Legacy note locked before real encryption existed: its content is
+      // still stored in clear. Migrate it to AES-GCM right now.
+      plainBlob = { html: note.html, drawing: note.drawing, history: note.history };
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      key = await deriveKey(pin, salt);
+      note.pinSalt = bytesToB64(salt);
+      note.pinCode = null;
+    } else {
+      throw new Error("no pin set on this note");
+    }
+  } catch {
+    lockFailCount++;
+    if (lockFailCount >= 5) {
+      lockLockedUntil = Date.now() + 30000;
+      lockFailCount = 0;
+      lockError.textContent = "Trop de tentatives, réessaie dans 30s";
+    } else {
+      lockError.textContent = "Code incorrect";
+    }
     lockError.classList.remove("hidden");
     lockInput.value = "";
     lockInput.focus();
+    return;
   }
+  lockFailCount = 0;
+  activeUnlockKey = { noteId: note.id, key };
+  note.html = plainBlob.html || "";
+  note.drawing = plainBlob.drawing || null;
+  note.history = plainBlob.history || [];
+  await persistNote(note);
+  lockOverlay.classList.add("hidden");
+  currentNote = note;
+  loadNoteIntoEditor();
+  showEditor();
 }
 
 lockUnlockBtn.addEventListener("click", attemptUnlock);
@@ -1043,26 +1294,57 @@ lockBtn.addEventListener("click", async () => {
   if (!currentNote.locked) {
     const pin = window.prompt("Choisis un code (4 chiffres ou plus) pour verrouiller cette note :");
     if (!pin) return;
-    currentNote.pinCode = await hashPin(pin);
+    currentNote.title = titleInput.value.trim();
+    currentNote.folder = folderInput.value.trim();
+    currentNote.tags = parseTags(tagsInput.value);
+    currentNote.html = textEditor.innerHTML;
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key = await deriveKey(pin, salt);
+    currentNote.pinSalt = bytesToB64(salt);
+    currentNote.pinCode = null;
     currentNote.locked = true;
-    setLockIcon(true);
-    lockBtn.classList.add("active");
-    scheduleSave();
-    showToast("Note verrouillée");
+    activeUnlockKey = { noteId: currentNote.id, key };
+    await persistNote(currentNote);
+    activeUnlockKey = null;
+    textEditor.innerHTML = "";
+    currentNote.html = "";
+    currentNote.drawing = null;
+    redrawStrokes();
+    showToast("Note verrouillée et chiffrée");
+    showList();
   } else {
     const pin = window.prompt("Entre le code pour retirer le verrou :");
     if (pin === null) return;
-    const hash = await hashPin(pin);
-    if (hash === currentNote.pinCode) {
-      currentNote.locked = false;
-      currentNote.pinCode = null;
-      setLockIcon(false);
-      lockBtn.classList.remove("active");
-      scheduleSave();
-      showToast("Verrou retiré");
-    } else {
+    let key = null;
+    let plainBlob = null;
+    try {
+      if (currentNote.pinSalt && currentNote.encBlob) {
+        key = await deriveKey(pin, b64ToBytes(currentNote.pinSalt));
+        plainBlob = JSON.parse(await decryptString(key, currentNote.encBlob));
+      } else if (currentNote.pinCode) {
+        const hash = await hashPin(pin);
+        if (hash !== currentNote.pinCode) throw new Error("wrong pin");
+        plainBlob = { html: currentNote.html, drawing: currentNote.drawing, history: currentNote.history };
+      } else {
+        throw new Error("no pin set");
+      }
+    } catch {
       showToast("Code incorrect");
+      return;
     }
+    currentNote.locked = false;
+    currentNote.pinSalt = null;
+    currentNote.pinCode = null;
+    currentNote.encBlob = null;
+    currentNote.html = plainBlob.html || "";
+    currentNote.drawing = plainBlob.drawing || null;
+    currentNote.history = plainBlob.history || [];
+    activeUnlockKey = null;
+    await persistNote(currentNote);
+    setLockIcon(false);
+    setPressed(lockBtn, false);
+    loadNoteIntoEditor();
+    showToast("Verrou retiré");
   }
 });
 
@@ -1161,6 +1443,45 @@ function renderHistory() {
     li.appendChild(label);
     li.appendChild(btn);
     historyListEl.appendChild(li);
+  });
+}
+
+// --- Backlinks (notes that wikilink to the currently open note) ---
+const backlinksBtn = document.getElementById("backlinks-btn");
+const backlinksPanel = document.getElementById("backlinks-panel");
+const backlinksListEl = document.getElementById("backlinks-list");
+
+backlinksBtn.addEventListener("click", () => {
+  reminderPanel.classList.add("hidden");
+  historyPanel.classList.add("hidden");
+  const opening = backlinksPanel.classList.contains("hidden");
+  backlinksPanel.classList.toggle("hidden");
+  if (opening) renderBacklinks();
+});
+
+function renderBacklinks() {
+  const needle = `data-note-id="${currentNote.id}"`;
+  const linking = notes.filter((n) => !n.deletedAt && n.id !== currentNote.id && !n.locked && (n.html || "").includes(needle));
+  backlinksListEl.innerHTML = "";
+  if (!linking.length) {
+    backlinksListEl.innerHTML = '<li class="history-empty">Aucune note ne pointe encore ici.</li>';
+    return;
+  }
+  linking.forEach((n) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = n.title || "Sans titre";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Ouvrir";
+    btn.addEventListener("click", () => {
+      backlinksPanel.classList.add("hidden");
+      goToNote(n.id);
+    });
+    li.appendChild(label);
+    li.appendChild(btn);
+    backlinksListEl.appendChild(li);
   });
 }
 
@@ -1282,6 +1603,54 @@ textEditor.addEventListener("input", () => {
   } catch {
     /* selection edge case: skip silently */
   }
+});
+
+// --- Wikilinks: typing [[Titre]] turns into a clickable link to that note ---
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = sel.getRangeAt(0).startOffset;
+  const text = node.textContent.slice(0, offset);
+  const match = text.match(/\[\[([^[\]]+)\]\]$/);
+  if (!match) return;
+  const query = match[1].trim().toLowerCase();
+  if (!query) return;
+  const target =
+    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+  if (!target) return;
+  const full = match[0];
+  const range = document.createRange();
+  try {
+    range.setStart(node, offset - full.length);
+    range.setEnd(node, offset);
+    range.deleteContents();
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "wikilink";
+    a.dataset.noteId = target.id;
+    a.textContent = target.title || "Sans titre";
+    range.insertNode(a);
+    const spacer = document.createTextNode("​");
+    a.parentNode.insertBefore(spacer, a.nextSibling);
+    range.setStart(spacer, 1);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    scheduleSave();
+  } catch {
+    /* selection edge case: skip silently */
+  }
+});
+
+textEditor.addEventListener("click", (e) => {
+  const link = e.target.closest("a.wikilink");
+  if (!link) return;
+  e.preventDefault();
+  const id = link.dataset.noteId;
+  if (notes.some((n) => n.id === id)) goToNote(id);
 });
 
 growPageBtn.addEventListener("click", () => {
@@ -1453,28 +1822,59 @@ function insertLink() {
 // --- Images (toolbar insert + paste) ---
 const imageInput = document.getElementById("image-input");
 
-function insertImageFile(file) {
+// Downscale + re-encode as JPEG before storing: a raw phone photo can be
+// several MB of base64 inside note.html, and every one of those bytes gets
+// duplicated into every history snapshot (see pushHistorySnapshot) and
+// reloaded whole into memory on every app boot (dbGetAll loads all notes).
+const IMAGE_MAX_DIMENSION = 1400;
+const IMAGE_QUALITY = 0.82;
+
+function compressImageFile(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const original = new Image();
+      original.onload = () => {
+        const scale = Math.min(1, IMAGE_MAX_DIMENSION / Math.max(original.width, original.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(original.width * scale);
+        canvas.height = Math.round(original.height * scale);
+        const ctx2d = canvas.getContext("2d");
+        ctx2d.drawImage(original, 0, 0, canvas.width, canvas.height);
+        try {
+          resolve(canvas.toDataURL("image/jpeg", IMAGE_QUALITY));
+        } catch {
+          resolve(reader.result);
+        }
+      };
+      original.onerror = () => resolve(reader.result);
+      original.src = reader.result;
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function insertImageFile(file) {
   if (!file || !file.type.startsWith("image/")) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    restoreSelection();
-    const img = document.createElement("img");
-    img.src = reader.result;
-    const sel = window.getSelection();
-    if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
-      const range = sel.getRangeAt(0);
-      range.collapse(false);
-      range.insertNode(img);
-      range.setStartAfter(img);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } else {
-      textEditor.appendChild(img);
-    }
-    scheduleSave();
-  };
-  reader.readAsDataURL(file);
+  const dataUrl = await compressImageFile(file);
+  if (!dataUrl) return;
+  restoreSelection();
+  const img = document.createElement("img");
+  img.src = dataUrl;
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer)) {
+    const range = sel.getRangeAt(0);
+    range.collapse(false);
+    range.insertNode(img);
+    range.setStartAfter(img);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    textEditor.appendChild(img);
+  }
+  scheduleSave();
 }
 
 imageInput.addEventListener("change", () => {
@@ -1761,7 +2161,7 @@ function updateToolbarState() {
     } catch {
       active = false;
     }
-    btn.classList.toggle("active", active);
+    setPressed(btn, active);
   });
   updateFontSelectState();
   updateStyleSelectState();
@@ -1791,9 +2191,9 @@ let activeStroke = null;
 function setTool(tool) {
   isErasing = tool === "eraser";
   isHighlighting = tool === "highlighter";
-  penBtn.classList.toggle("active", tool === "pen");
-  highlighterBtn.classList.toggle("active", tool === "highlighter");
-  eraserBtn.classList.toggle("active", tool === "eraser");
+  setPressed(penBtn, tool === "pen");
+  setPressed(highlighterBtn, tool === "highlighter");
+  setPressed(eraserBtn, tool === "eraser");
   renderColorRow();
 }
 
@@ -1810,7 +2210,7 @@ function renderColorRow() {
     swatch.addEventListener("click", () => {
       drawColor = color;
       isErasing = false;
-      eraserBtn.classList.remove("active");
+      setPressed(eraserBtn, false);
       colorRow.querySelectorAll(".color-swatch").forEach((s) => s.classList.remove("selected"));
       swatch.classList.add("selected");
     });
@@ -1825,8 +2225,8 @@ highlighterBtn.addEventListener("click", () => setTool("highlighter"));
 document.querySelectorAll(".width-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     drawWidth = Number(btn.dataset.width);
-    document.querySelectorAll(".width-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
+    document.querySelectorAll(".width-btn").forEach((b) => setPressed(b, false));
+    setPressed(btn, true);
   });
 });
 
@@ -2048,6 +2448,19 @@ async function handleRemoteSnapshot(snapshot) {
 
 async function persistNote(note) {
   recordActivityToday();
+  // A locked note is never written to IndexedDB/Firestore in clear: while an
+  // unlock key is active for it, its body/drawing/history are swapped for an
+  // AES-GCM ciphertext just for the write, then restored in memory right after.
+  let restore = null;
+  if (note.locked && activeUnlockKey && activeUnlockKey.noteId === note.id) {
+    const blob = JSON.stringify({ html: note.html, drawing: note.drawing, history: note.history });
+    const enc = await encryptString(activeUnlockKey.key, blob);
+    restore = { html: note.html, drawing: note.drawing, history: note.history };
+    note.encBlob = enc;
+    note.html = "";
+    note.drawing = null;
+    note.history = [];
+  }
   await dbPut(note);
   if (syncDb && syncCode && !applyingRemoteChange) {
     try {
@@ -2055,6 +2468,11 @@ async function persistNote(note) {
     } catch (err) {
       console.warn("sync push failed", err);
     }
+  }
+  if (restore) {
+    note.html = restore.html;
+    note.drawing = restore.drawing;
+    note.history = restore.history;
   }
 }
 
@@ -2117,7 +2535,7 @@ document.addEventListener("keydown", (e) => {
       lockCancelBtn.click();
       return;
     }
-    [reminderPanel, historyPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
+    [reminderPanel, historyPanel, backlinksPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
   }
 
   const mod = e.metaKey || e.ctrlKey;
@@ -2278,8 +2696,14 @@ cmdkInput.addEventListener("keydown", (e) => {
 
 // --- Init ---
 (async () => {
-  notes = await dbGetAll();
-  await purgeOldTrash();
+  try {
+    notes = await dbGetAll();
+    await purgeOldTrash();
+  } catch (err) {
+    console.error("Échec du chargement des notes locales", err);
+    notes = [];
+    showToast("Impossible de charger tes notes locales (stockage indisponible ou navigation privée)");
+  }
   showList();
   initSyncFromStorage();
 })();
@@ -2288,5 +2712,10 @@ cmdkInput.addEventListener("keydown", (e) => {
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("service-worker.js").catch(() => {});
+  });
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "noteflow-update-available") {
+      showToast("Nouvelle version disponible", () => window.location.reload(), { actionLabel: "Actualiser", ctrlZ: false });
+    }
   });
 }

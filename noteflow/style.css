@@ -5,13 +5,15 @@
   --surface-glass: rgba(255, 253, 248, 0.72);
   --paper: #fffdf8;
   --paper-text: #17140f;
-  --paper-muted: #8c8474;
+  --paper-muted: #6e6656;
+  --paper-gold-ink: #8a5f18;
   --text: #17140f;
-  --muted: #8c8474;
+  --muted: #6e6656;
   --border: rgba(23, 20, 15, 0.10);
   --accent: #17140f;
   --accent-text: #fffdf8;
   --gold: #c8963c;
+  --gold-ink: #8a5f18;
   --danger: #c0392b;
   --radius: 16px;
   --shadow-sm: 0 1px 2px rgba(23, 20, 15, 0.05), 0 1px 1px rgba(23, 20, 15, 0.04);
@@ -36,6 +38,7 @@
     --accent: #f0e9dc;
     --accent-text: #17140f;
     --gold: #d9a94d;
+    --gold-ink: #d9a94d;
     --danger: #ff6b52;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45);
@@ -53,11 +56,12 @@
   --surface: #fffdf8;
   --surface-glass: rgba(255, 253, 248, 0.72);
   --text: #17140f;
-  --muted: #8c8474;
+  --muted: #6e6656;
   --border: rgba(23, 20, 15, 0.10);
   --accent: #17140f;
   --accent-text: #fffdf8;
   --gold: #c8963c;
+  --gold-ink: #8a5f18;
   --danger: #c0392b;
   --shadow-sm: 0 1px 2px rgba(23, 20, 15, 0.05), 0 1px 1px rgba(23, 20, 15, 0.04);
   --shadow-md: 0 1px 2px rgba(23, 20, 15, 0.06), 0 8px 20px rgba(23, 20, 15, 0.08);
@@ -79,6 +83,7 @@
   --accent: #f0e9dc;
   --accent-text: #17140f;
   --gold: #d9a94d;
+  --gold-ink: #d9a94d;
   --danger: #ff6b52;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45);
@@ -235,7 +240,7 @@ body {
   gap: 4px;
   font-size: 12px;
   font-weight: 700;
-  color: var(--gold);
+  color: var(--gold-ink);
   background: color-mix(in srgb, var(--gold) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--gold) 30%, transparent);
   border-radius: 999px;
@@ -865,6 +870,21 @@ button {
   transition: box-shadow 0.2s var(--ease), transform 0.2s var(--ease), opacity 0.15s var(--ease);
 }
 
+@keyframes noteIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.note-item.note-in {
+  animation: noteIn 0.28s var(--ease) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-item.note-in {
+    animation: none;
+  }
+}
+
 .note-item.dragging {
   opacity: 0.4;
 }
@@ -966,6 +986,25 @@ button {
   color: white;
 }
 
+.note-item .note-tag-chip {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 9px;
+  color: var(--gold-ink);
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+}
+
+.tag-filter-chip.tag-chip {
+  color: var(--gold-ink);
+}
+
+.tag-filter-chip.tag-chip.active {
+  border-color: var(--gold);
+  color: var(--accent-text);
+  background: var(--gold);
+}
+
 .note-item .note-reminder-chip {
   display: inline-flex;
   align-items: center;
@@ -1017,6 +1056,29 @@ button {
 .note-item .note-action.danger:hover {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+@keyframes pressSpring {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.9); }
+  70% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.note-action.danger:active,
+.menu-item.danger:active,
+#delete-note-btn:active,
+#sel-delete-btn:active {
+  animation: pressSpring 0.32s var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-action.danger:active,
+  .menu-item.danger:active,
+  #delete-note-btn:active,
+  #sel-delete-btn:active {
+    animation: none;
+  }
 }
 
 .empty {
@@ -1529,7 +1591,7 @@ select option {
 }
 
 .text-editor a {
-  color: var(--gold);
+  color: var(--paper-gold-ink);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -1653,11 +1715,17 @@ input:focus-visible,
   border-radius: 8px;
 }
 
-.mode-btn:focus-visible,
-.tag-filter-chip:focus-visible,
-.icon-btn:focus-visible {
+button:focus-visible,
+a:focus-visible,
+.cmdk-item:focus-visible {
   outline: none;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 40%, transparent);
+  border-radius: 8px;
+}
+
+.icon-btn:focus-visible,
+.note-item.selected:focus-visible {
+  border-radius: 999px;
 }
 
 /* Slim, unobtrusive scrollbars for desktop */
