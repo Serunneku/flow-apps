@@ -16,11 +16,11 @@
   --gold-ink: #8a5f18;
   --danger: #c0392b;
   --radius: 16px;
-  --shadow-sm: 0 1px 2px rgba(23, 20, 15, 0.05), 0 1px 1px rgba(23, 20, 15, 0.04);
-  --shadow-md: 0 1px 2px rgba(23, 20, 15, 0.06), 0 8px 20px rgba(23, 20, 15, 0.08);
-  --shadow-hover: 0 2px 4px rgba(23, 20, 15, 0.07), 0 14px 30px rgba(23, 20, 15, 0.11);
-  --shadow-page: 0 1px 3px rgba(23, 20, 15, 0.07), 0 18px 40px rgba(23, 20, 15, 0.11);
-  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --shadow-sm: 1px 1px 2px rgba(23, 20, 15, 0.05), 1px 1px 1px rgba(23, 20, 15, 0.04);
+  --shadow-md: 1px 1px 2px rgba(23, 20, 15, 0.06), 2px 8px 20px rgba(23, 20, 15, 0.08);
+  --shadow-hover: 1px 2px 4px rgba(23, 20, 15, 0.07), 2px 14px 30px rgba(23, 20, 15, 0.11);
+  --shadow-page: 1px 1px 3px rgba(23, 20, 15, 0.07), 3px 18px 40px rgba(23, 20, 15, 0.11);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --mesh-1: rgba(200, 150, 60, 0.24);
   --mesh-2: rgba(23, 20, 15, 0.10);
   --mesh-3: rgba(140, 132, 116, 0.18);
@@ -40,10 +40,10 @@
     --gold: #d9a94d;
     --gold-ink: #d9a94d;
     --danger: #ff6b52;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45);
-    --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.55);
-    --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(217, 169, 77, 0.05);
+    --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(217, 169, 77, 0.06);
+    --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(217, 169, 77, 0.08);
+    --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(217, 169, 77, 0.07);
     --mesh-1: rgba(217, 169, 77, 0.34);
     --mesh-2: rgba(240, 233, 220, 0.10);
     --mesh-3: rgba(167, 159, 142, 0.20);
@@ -63,10 +63,10 @@
   --gold: #c8963c;
   --gold-ink: #8a5f18;
   --danger: #c0392b;
-  --shadow-sm: 0 1px 2px rgba(23, 20, 15, 0.05), 0 1px 1px rgba(23, 20, 15, 0.04);
-  --shadow-md: 0 1px 2px rgba(23, 20, 15, 0.06), 0 8px 20px rgba(23, 20, 15, 0.08);
-  --shadow-hover: 0 2px 4px rgba(23, 20, 15, 0.07), 0 14px 30px rgba(23, 20, 15, 0.11);
-  --shadow-page: 0 1px 3px rgba(23, 20, 15, 0.07), 0 18px 40px rgba(23, 20, 15, 0.11);
+  --shadow-sm: 1px 1px 2px rgba(23, 20, 15, 0.05), 1px 1px 1px rgba(23, 20, 15, 0.04);
+  --shadow-md: 1px 1px 2px rgba(23, 20, 15, 0.06), 2px 8px 20px rgba(23, 20, 15, 0.08);
+  --shadow-hover: 1px 2px 4px rgba(23, 20, 15, 0.07), 2px 14px 30px rgba(23, 20, 15, 0.11);
+  --shadow-page: 1px 1px 3px rgba(23, 20, 15, 0.07), 3px 18px 40px rgba(23, 20, 15, 0.11);
   --mesh-1: rgba(200, 150, 60, 0.24);
   --mesh-2: rgba(23, 20, 15, 0.10);
   --mesh-3: rgba(140, 132, 116, 0.18);
@@ -85,10 +85,10 @@
   --gold: #d9a94d;
   --gold-ink: #d9a94d;
   --danger: #ff6b52;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45);
-  --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.55);
-  --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(217, 169, 77, 0.05);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(217, 169, 77, 0.06);
+  --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.4), 0 14px 30px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(217, 169, 77, 0.08);
+  --shadow-page: 0 1px 3px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(217, 169, 77, 0.07);
   --mesh-1: rgba(217, 169, 77, 0.34);
   --mesh-2: rgba(240, 233, 220, 0.10);
   --mesh-3: rgba(167, 159, 142, 0.20);
@@ -408,6 +408,12 @@ button {
 .link-btn.danger:hover {
   color: var(--danger);
   opacity: 0.8;
+}
+
+.busy-guard {
+  opacity: 0.55;
+  pointer-events: none;
+  filter: saturate(0.7);
 }
 
 .note-select-checkbox {
@@ -1646,6 +1652,20 @@ select option {
   }
 }
 
+.page-folio {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 1;
+  font-size: 11px;
+  font-variant: small-caps;
+  letter-spacing: 0.12em;
+  color: var(--paper-gold-ink);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .grow-page-btn {
   display: block;
   margin: 12px auto 0;
@@ -1817,7 +1837,19 @@ a:focus-visible,
 
 .lock-input:focus {
   outline: none;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 35%, transparent);
+  animation: lockPulse 3s var(--ease) infinite;
+}
+
+@keyframes lockPulse {
+  0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 25%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--gold) 40%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-input:focus {
+    animation: none;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 35%, transparent);
+  }
 }
 
 .lock-error {

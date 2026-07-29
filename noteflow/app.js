@@ -245,6 +245,26 @@ function setPressed(el, state) {
   el.setAttribute("aria-pressed", String(!!state));
 }
 
+// Wraps a critical/destructive action's click handler so a second click
+// during the async operation is ignored instead of silently double-firing
+// (e.g. a bulk delete run twice on a slow device). The button dims briefly
+// and re-enables itself once the handler settles.
+function guardDoubleClick(el, handler) {
+  el.addEventListener("click", async (e) => {
+    if (el.disabled) return;
+    el.disabled = true;
+    el.classList.add("busy-guard");
+    try {
+      await handler(e);
+    } finally {
+      setTimeout(() => {
+        el.disabled = false;
+        el.classList.remove("busy-guard");
+      }, 400);
+    }
+  });
+}
+
 // --- Toast (with optional undo) ---
 const toastEl = document.getElementById("toast");
 const toastText = document.getElementById("toast-text");
@@ -530,7 +550,7 @@ function toggleSelect(id, li, checkbox) {
 document.getElementById("select-mode-btn").addEventListener("click", () => setSelectionMode(true));
 document.getElementById("sel-cancel-btn").addEventListener("click", () => setSelectionMode(false));
 
-document.getElementById("sel-archive-btn").addEventListener("click", async () => {
+guardDoubleClick(document.getElementById("sel-archive-btn"), async () => {
   const ids = [...selectedIds];
   if (!ids.length) return;
   for (const id of ids) {
@@ -544,7 +564,7 @@ document.getElementById("sel-archive-btn").addEventListener("click", async () =>
   setSelectionMode(false);
 });
 
-document.getElementById("sel-delete-btn").addEventListener("click", async () => {
+guardDoubleClick(document.getElementById("sel-delete-btn"), async () => {
   const ids = [...selectedIds];
   if (!ids.length) return;
   const now = Date.now();
@@ -568,7 +588,7 @@ document.getElementById("sel-delete-btn").addEventListener("click", async () => 
   setSelectionMode(false);
 });
 
-document.getElementById("sel-move-btn").addEventListener("click", async () => {
+guardDoubleClick(document.getElementById("sel-move-btn"), async () => {
   const ids = [...selectedIds];
   if (!ids.length) return;
   const folder = window.prompt("Déplacer vers quel dossier ?", "");
@@ -658,7 +678,16 @@ function renderList() {
     if (note.color) li.style.backgroundColor = note.color;
     li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", query);
     li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, query);
-    li.querySelector(".note-date").textContent = timeAgo(note.updatedAt);
+    const dateEl = li.querySelector(".note-date");
+    dateEl.textContent = timeAgo(note.updatedAt);
+    const exactDate = new Date(note.updatedAt).toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" });
+    dateEl.title = exactDate;
+    let longPressTimer = null;
+    dateEl.addEventListener("touchstart", () => {
+      longPressTimer = setTimeout(() => showToast(exactDate), 500);
+    });
+    dateEl.addEventListener("touchend", () => clearTimeout(longPressTimer));
+    dateEl.addEventListener("touchmove", () => clearTimeout(longPressTimer));
     if (note.reminderAt && note.reminderAt > Date.now()) {
       const rem = document.createElement("span");
       rem.className = "note-reminder-chip";
@@ -772,6 +801,9 @@ async function permanentlyDeleteNote(id) {
   notes = notes.filter((n) => n.id !== id);
   await removeNoteEverywhere(id);
   renderList();
+  // A distinct two-beat pattern for the one delete that can't be undone,
+  // instead of the same generic buzz as every other (reversible) action.
+  if (navigator.vibrate) navigator.vibrate([10, 40, 10]);
   showToast("Note supprimée définitivement");
 }
 
@@ -836,11 +868,37 @@ function newNoteObject() {
   };
 }
 
-function updateWordCount() {
+let displayedWordCount = 0;
+let wordCountAnimFrame = null;
+
+function formatWordCount(words, chars) {
+  return words ? `${words} mot${words > 1 ? "s" : ""} · ${chars} car.` : "";
+}
+
+// The count "rolls" from its previous value to the new one, like an odometer,
+// instead of jumping straight to the new number on every keystroke.
+function updateWordCount(instant) {
   const text = textEditor.textContent.trim();
   const words = text ? text.split(/\s+/).length : 0;
   const chars = text.length;
-  wordCountEl.textContent = words ? `${words} mot${words > 1 ? "s" : ""} · ${chars} car.` : "";
+  cancelAnimationFrame(wordCountAnimFrame);
+  if (instant) {
+    displayedWordCount = words;
+    wordCountEl.textContent = formatWordCount(words, chars);
+    return;
+  }
+  const startWords = displayedWordCount;
+  const startTime = performance.now();
+  const duration = 300;
+  const step = (now) => {
+    const t = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const current = Math.round(startWords + (words - startWords) * eased);
+    wordCountEl.textContent = formatWordCount(current, chars);
+    if (t < 1) wordCountAnimFrame = requestAnimationFrame(step);
+    else displayedWordCount = words;
+  };
+  wordCountAnimFrame = requestAnimationFrame(step);
 }
 
 async function openNote(id) {
@@ -885,7 +943,8 @@ function loadNoteIntoEditor() {
   updateNoteColorSelection();
   updatePaperStyleSelection();
   updateArchiveMenuItem();
-  updateWordCount();
+  updateWordCount(true);
+  updatePageFolio();
   notePage.classList.remove("page-turn");
   void notePage.offsetWidth;
   notePage.classList.add("page-turn");
@@ -1137,6 +1196,15 @@ const modeTextBtn = document.getElementById("mode-text-btn");
 const modeDrawBtn = document.getElementById("mode-draw-btn");
 const drawToolbar = document.getElementById("draw-toolbar");
 const growPageBtn = document.getElementById("grow-page-btn");
+const pageFolioEl = document.getElementById("page-folio");
+
+// Purely decorative folio number, like a bound book — only appears once the
+// page has actually been grown at least once via "+ Agrandir la page".
+function updatePageFolio() {
+  const pages = Math.round((currentNote.pageHeight || 700) / 700);
+  pageFolioEl.classList.toggle("hidden", pages <= 1);
+  pageFolioEl.textContent = pages > 1 ? String(pages) : "";
+}
 
 function setMode(mode) {
   notePage.classList.toggle("mode-text", mode === "text");
@@ -1708,6 +1776,7 @@ growPageBtn.addEventListener("click", () => {
   currentNote.pageHeight = (currentNote.pageHeight || 700) + 400;
   notePage.style.minHeight = currentNote.pageHeight + "px";
   textEditor.style.minHeight = currentNote.pageHeight + "px";
+  updatePageFolio();
   initCanvasSize();
   redrawStrokes();
   scheduleSave();
