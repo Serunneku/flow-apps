@@ -1268,6 +1268,81 @@ duplicateNoteBtn.addEventListener("click", async () => {
   showToast("Note dupliquée");
 });
 
+// --- Reversible note splitting: one note per H2 heading, each linked back
+// to the original via a wikilink (reuses the existing backlinks panel). ---
+document.getElementById("split-note-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour la scinder");
+    return;
+  }
+  flushSave(true);
+  // childNodes, not children: a fresh note's very first typed line can be a
+  // bare top-level text node (no <p> wrapper yet) — .children alone would
+  // silently drop it from the "intro" section.
+  const children = Array.from(textEditor.childNodes);
+  const splitIndices = children.map((el, i) => (el.nodeType === 1 && el.tagName === "H2" ? i : -1)).filter((i) => i >= 0);
+  if (!splitIndices.length) {
+    showToast("Aucun titre (H2) trouvé pour scinder cette note");
+    return;
+  }
+  const introNodes = children.slice(0, splitIndices[0]);
+  const sections = splitIndices.map((startIdx, i) => {
+    const endIdx = i + 1 < splitIndices.length ? splitIndices[i + 1] : children.length;
+    return children.slice(startIdx, endIdx);
+  });
+  const originalId = currentNote.id;
+  const originalTitle = currentNote.title || "Sans titre";
+  const originalHtmlBackup = currentNote.html;
+  const createdIds = [];
+  const now = Date.now();
+  for (const section of sections) {
+    const [h2, ...rest] = section;
+    const childNote = newNoteObject();
+    childNote.title = h2.textContent.trim() || "Sans titre";
+    childNote.folder = currentNote.folder;
+    childNote.createdAt = now;
+    childNote.updatedAt = now;
+    const backlinkP = document.createElement("p");
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "wikilink";
+    a.dataset.noteId = originalId;
+    a.textContent = originalTitle;
+    backlinkP.appendChild(document.createTextNode("↩ Scindée depuis "));
+    backlinkP.appendChild(a);
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(backlinkP);
+    rest.forEach((n) => wrapper.appendChild(n.cloneNode(true)));
+    childNote.html = wrapper.innerHTML;
+    notes.unshift(childNote);
+    await persistNote(childNote);
+    createdIds.push(childNote.id);
+  }
+  const introWrapper = document.createElement("div");
+  introNodes.forEach((n) => introWrapper.appendChild(n.cloneNode(true)));
+  currentNote.html = introWrapper.innerHTML;
+  currentNote.updatedAt = now;
+  await persistNote(currentNote);
+  textEditor.innerHTML = currentNote.html;
+  updateWordCount(true);
+  renderList();
+  showToast(
+    `Note scindée en ${sections.length} nouvelle${sections.length > 1 ? "s" : ""} note${sections.length > 1 ? "s" : ""}`,
+    async () => {
+      currentNote.html = originalHtmlBackup;
+      currentNote.updatedAt = Date.now();
+      await persistNote(currentNote);
+      for (const id of createdIds) {
+        notes = notes.filter((n) => n.id !== id);
+        await removeNoteEverywhere(id);
+      }
+      textEditor.innerHTML = currentNote.html;
+      updateWordCount(true);
+      renderList();
+    }
+  );
+});
+
 // --- Share / export a single note ---
 document.getElementById("share-note-btn").addEventListener("click", async () => {
   const title = titleInput.value.trim() || "Note NoteFlow";
