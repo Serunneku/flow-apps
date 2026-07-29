@@ -1033,6 +1033,43 @@ button {
   background: var(--gold);
 }
 
+.saved-search-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.saved-search-chip > button:first-child {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 4px 4px 4px 12px;
+}
+
+.saved-search-chip.active {
+  border-color: var(--gold);
+  background: var(--gold);
+  color: var(--accent-text);
+}
+
+.saved-search-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 10px 4px 2px;
+}
+
+.saved-search-remove:hover {
+  opacity: 1;
+}
+
 .note-item .note-reminder-chip {
   display: inline-flex;
   align-items: center;

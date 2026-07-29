@@ -55,6 +55,7 @@ const PREF_KEYS = {
   streakDate: "noteflow.streak.date",
   streakCount: "noteflow.streak.count",
   sound: "noteflow.sound",
+  savedSearches: "noteflow.savedSearches",
 };
 const loadPref = (key, fallback) => {
   try {
@@ -563,6 +564,73 @@ function allTags() {
   return [...new Set(notes.flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
 }
 
+// --- Global tag manager: rename (or merge, by renaming to an existing tag)
+// across every note at once, instead of a tag being stuck forever once typed. ---
+const tagManagerBtn = document.getElementById("manage-tags-btn");
+const tagManagerPanel = document.getElementById("tag-manager-panel");
+const tagManagerListEl = document.getElementById("tag-manager-list");
+
+tagManagerBtn.addEventListener("click", () => {
+  const opening = tagManagerPanel.classList.contains("hidden");
+  tagManagerPanel.classList.toggle("hidden");
+  if (opening) renderTagManager();
+});
+
+function renderTagManager() {
+  const tags = allTags();
+  tagManagerListEl.innerHTML = "";
+  if (!tags.length) {
+    tagManagerListEl.innerHTML = '<li class="history-empty">Aucun tag pour l\'instant.</li>';
+    return;
+  }
+  tags.forEach((tag) => {
+    const count = notes.filter((n) => (n.tags || []).includes(tag)).length;
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = `#${tag} (${count})`;
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = "6px";
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.textContent = "Renommer";
+    renameBtn.addEventListener("click", async () => {
+      const next = window.prompt(`Renommer #${tag} en :`, tag);
+      if (!next || !next.trim() || next.trim() === tag) return;
+      await renameTagEverywhere(tag, next.trim());
+      renderTagManager();
+    });
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "link-btn danger";
+    deleteBtn.textContent = "Supprimer";
+    deleteBtn.addEventListener("click", async () => {
+      await renameTagEverywhere(tag, null);
+      renderTagManager();
+    });
+    actions.appendChild(renameBtn);
+    actions.appendChild(deleteBtn);
+    li.appendChild(label);
+    li.appendChild(actions);
+    tagManagerListEl.appendChild(li);
+  });
+}
+
+// newTag === null removes the tag entirely (used by the "Supprimer" action);
+// otherwise renaming onto an existing tag merges the two automatically,
+// since tags are deduplicated per note.
+async function renameTagEverywhere(oldTag, newTag) {
+  const affected = notes.filter((n) => (n.tags || []).includes(oldTag));
+  for (const note of affected) {
+    const set = new Set(note.tags.map((t) => (t === oldTag ? newTag : t)).filter(Boolean));
+    note.tags = [...set];
+    await persistNote(note);
+  }
+  renderList();
+  showToast(newTag ? `#${oldTag} renommé en #${newTag}` : `#${oldTag} supprimé de ${affected.length} note(s)`);
+}
+
 let draggedNoteId = null;
 
 function reorderNotes(targetId) {
@@ -745,6 +813,7 @@ function renderList() {
   notesListEl.classList.toggle("selection-mode", selectionMode);
   if (selectionMode) updateSelectionCount();
   renderFolderFilters();
+  renderSavedSearchChips();
   const query = searchQuery.trim().toLowerCase();
   let visible = notes.filter((n) => {
     if (listView === "trash" && !n.deletedAt) return false;
@@ -914,6 +983,75 @@ searchInput.addEventListener("input", () => {
     searchQuery = searchInput.value;
     renderList();
   }, 150);
+});
+
+// --- Saved searches: pin the current query + folder/tag filter combo as a
+// chip, instead of a whole new "smart folder" concept parallel to real ones ---
+const savedSearchChipsEl = document.getElementById("saved-search-chips");
+const saveSearchBtn = document.getElementById("save-search-btn");
+
+function loadSavedSearches() {
+  return loadPref(PREF_KEYS.savedSearches, []);
+}
+function persistSavedSearches(list) {
+  savePref(PREF_KEYS.savedSearches, list);
+}
+
+function renderSavedSearchChips() {
+  const saved = loadSavedSearches();
+  savedSearchChipsEl.classList.toggle("hidden", saved.length === 0);
+  savedSearchChipsEl.innerHTML = "";
+  saved.forEach((s) => {
+    const chip = document.createElement("span");
+    chip.className = "tag-filter-chip saved-search-chip";
+    const isActive = searchQuery === s.query && activeFolderFilter === s.folder && activeTagFilter === s.tag;
+    chip.classList.toggle("active", isActive);
+    const label = document.createElement("button");
+    label.type = "button";
+    label.textContent = "★ " + s.label;
+    label.addEventListener("click", () => {
+      searchQuery = s.query || "";
+      searchInput.value = searchQuery;
+      activeFolderFilter = s.folder || null;
+      activeTagFilter = s.tag || null;
+      renderList();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "saved-search-remove";
+    remove.setAttribute("aria-label", "Supprimer cette recherche enregistrée");
+    remove.textContent = "×";
+    remove.addEventListener("click", (e) => {
+      e.stopPropagation();
+      persistSavedSearches(loadSavedSearches().filter((x) => x.id !== s.id));
+      renderSavedSearchChips();
+    });
+    chip.appendChild(label);
+    chip.appendChild(remove);
+    savedSearchChipsEl.appendChild(chip);
+  });
+}
+renderSavedSearchChips();
+
+saveSearchBtn.addEventListener("click", () => {
+  if (!searchQuery.trim() && !activeFolderFilter && !activeTagFilter) {
+    showToast("Fais d'abord une recherche ou choisis un filtre à enregistrer");
+    return;
+  }
+  const defaultLabel = searchQuery.trim() || activeTagFilter || activeFolderFilter || "Recherche";
+  const label = window.prompt("Nom de cette recherche enregistrée :", defaultLabel);
+  if (!label) return;
+  const saved = loadSavedSearches();
+  saved.push({
+    id: crypto.randomUUID(),
+    label: label.trim(),
+    query: searchQuery,
+    folder: activeFolderFilter,
+    tag: activeTagFilter,
+  });
+  persistSavedSearches(saved);
+  renderSavedSearchChips();
+  showToast("Recherche enregistrée");
 });
 
 const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
