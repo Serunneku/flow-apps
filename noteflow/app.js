@@ -69,6 +69,7 @@ let notes = [];
 let currentNote = null;
 let searchQuery = "";
 let activeFolderFilter = null;
+let activeTagFilter = null;
 let listView = "active"; // "active" | "archived" | "trash"
 let selectionMode = false;
 let selectedIds = new Set();
@@ -399,6 +400,10 @@ function allFolders() {
   return [...new Set(notes.map((n) => n.folder).filter(Boolean))];
 }
 
+function allTags() {
+  return [...new Set(notes.flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
+}
+
 let draggedNoteId = null;
 
 function reorderNotes(targetId) {
@@ -416,14 +421,25 @@ function reorderNotes(targetId) {
 }
 
 function renderFolderFilters() {
-  const folders = allFolders();
-  folderFiltersEl.classList.toggle("hidden", folders.length === 0);
+  // Folders support "Parent/Enfant" paths: sorting alphabetically naturally
+  // groups a parent next to its children, and selecting a parent also shows
+  // notes filed one level (or more) below it — a lightweight hierarchy
+  // without needing a full collapsible tree widget. Tag chips follow the
+  // folder chips in the same row and combine with the folder filter (both
+  // can be active together) rather than replacing it.
+  const folders = allFolders().sort((a, b) => a.localeCompare(b, "fr"));
+  const tags = allTags();
+  folderFiltersEl.classList.toggle("hidden", folders.length === 0 && tags.length === 0);
   folderFiltersEl.innerHTML = "";
   folders.forEach((folder) => {
+    const parts = folder.split("/");
+    const depth = parts.length - 1;
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "tag-filter-chip" + (activeFolderFilter === folder ? " active" : "");
-    chip.textContent = folder;
+    if (depth > 0) chip.style.marginLeft = `${depth * 14}px`;
+    chip.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
+    chip.title = folder;
     chip.addEventListener("click", () => {
       activeFolderFilter = activeFolderFilter === folder ? null : folder;
       renderList();
@@ -438,6 +454,17 @@ function renderFolderFilters() {
         persistNote(note);
         renderList();
       }
+    });
+    folderFiltersEl.appendChild(chip);
+  });
+  tags.forEach((tag) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "tag-filter-chip tag-chip" + (activeTagFilter === tag ? " active" : "");
+    chip.textContent = "#" + tag;
+    chip.addEventListener("click", () => {
+      activeTagFilter = activeTagFilter === tag ? null : tag;
+      renderList();
     });
     folderFiltersEl.appendChild(chip);
   });
@@ -466,6 +493,7 @@ const VIEW_LABEL = { archived: "Archives", trash: "Corbeille" };
 function setListView(view) {
   listView = view;
   activeFolderFilter = null;
+  activeTagFilter = null;
   viewBanner.classList.toggle("hidden", view === "active");
   viewBannerTitle.textContent = VIEW_LABEL[view] || "";
   renderList();
@@ -563,9 +591,23 @@ function renderList() {
     if (listView === "trash" && !n.deletedAt) return false;
     if (listView === "archived" && (!n.archived || n.deletedAt)) return false;
     if (listView === "active" && (n.archived || n.deletedAt)) return false;
-    if (activeFolderFilter && n.folder !== activeFolderFilter) return false;
+    if (
+      activeFolderFilter &&
+      n.folder !== activeFolderFilter &&
+      !(n.folder || "").startsWith(activeFolderFilter + "/")
+    )
+      return false;
+    if (activeTagFilter && !(n.tags || []).includes(activeTagFilter)) return false;
     if (query) {
-      const haystack = (n.title + " " + (n.folder || "") + " " + (n.locked ? "" : getPreview(n))).toLowerCase();
+      const haystack = (
+        n.title +
+        " " +
+        (n.folder || "") +
+        " " +
+        (n.tags || []).join(" ") +
+        " " +
+        (n.locked ? "" : getPreview(n))
+      ).toLowerCase();
       if (!haystack.includes(query)) return false;
     }
     return true;
@@ -629,6 +671,12 @@ function renderList() {
       chip.textContent = note.folder;
       li.querySelector(".note-meta").appendChild(chip);
     }
+    (note.tags || []).forEach((tag) => {
+      const chip = document.createElement("span");
+      chip.className = "note-tag-chip";
+      chip.textContent = "#" + tag;
+      li.querySelector(".note-meta").appendChild(chip);
+    });
     const checkbox = li.querySelector(".note-select-checkbox");
     checkbox.checked = selectedIds.has(note.id);
     li.classList.toggle("selected", selectedIds.has(note.id));
@@ -744,6 +792,7 @@ async function purgeOldTrash() {
 // --- Editor ---
 const titleInput = document.getElementById("title-input");
 const folderInput = document.getElementById("folder-input");
+const tagsInput = document.getElementById("tags-input");
 const textEditor = document.getElementById("text-editor");
 const backBtn = document.getElementById("back-btn");
 const pinBtn = document.getElementById("pin-btn");
@@ -762,6 +811,7 @@ function newNoteObject() {
     title: "",
     html: "",
     folder: "",
+    tags: [],
     pinned: false,
     createdAt: now,
     updatedAt: now,
@@ -801,9 +851,14 @@ async function openNote(id) {
   showEditor();
 }
 
+function parseTags(raw) {
+  return [...new Set((raw || "").split(/[,#]/).map((t) => t.trim()).filter(Boolean))];
+}
+
 function loadNoteIntoEditor() {
   titleInput.value = currentNote.title || "";
   folderInput.value = currentNote.folder || "";
+  tagsInput.value = (currentNote.tags || []).join(", ");
   textEditor.innerHTML = currentNote.html || "";
   setPressed(pinBtn, !!currentNote.pinned);
   setLockIcon(!!currentNote.locked);
@@ -1016,6 +1071,7 @@ async function flushSave(immediate) {
   }
   currentNote.title = newTitle;
   currentNote.folder = folderInput.value.trim();
+  currentNote.tags = parseTags(tagsInput.value);
   currentNote.html = newHtml;
   currentNote.updatedAt = Date.now();
   await persistNote(currentNote);
@@ -1024,6 +1080,7 @@ async function flushSave(immediate) {
 
 titleInput.addEventListener("input", scheduleSave);
 folderInput.addEventListener("change", scheduleSave);
+tagsInput.addEventListener("change", scheduleSave);
 textEditor.addEventListener("input", () => {
   scheduleSave();
   updateWordCount();
@@ -1196,6 +1253,7 @@ lockBtn.addEventListener("click", async () => {
     if (!pin) return;
     currentNote.title = titleInput.value.trim();
     currentNote.folder = folderInput.value.trim();
+    currentNote.tags = parseTags(tagsInput.value);
     currentNote.html = textEditor.innerHTML;
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const key = await deriveKey(pin, salt);
