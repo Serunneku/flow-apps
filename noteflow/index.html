@@ -153,6 +153,7 @@
             <div class="menu-sep"></div>
             <button class="menu-item" id="reminder-btn" type="button"><svg class="icon"><use href="#icon-bell"/></svg>Rappel</button>
             <button class="menu-item" id="history-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Historique des versions</button>
+            <button class="menu-item" id="backlinks-btn" type="button"><svg class="icon"><use href="#icon-link"/></svg>Notes liées</button>
             <button class="menu-item" id="lock-btn" type="button"><svg class="icon"><use href="#icon-lock-open"/></svg>Verrouiller</button>
             <button class="menu-item" id="print-btn" type="button"><svg class="icon"><use href="#icon-print"/></svg>Imprimer / PDF</button>
             <div class="menu-sep"></div>
@@ -177,6 +178,12 @@
     <div id="history-panel" class="side-panel hidden">
       <p class="sync-status">Versions précédentes de cette note</p>
       <ul id="history-list" class="history-list"></ul>
+    </div>
+
+    <div id="backlinks-panel" class="side-panel hidden">
+      <p class="sync-status">Notes qui pointent ici</p>
+      <ul id="backlinks-list" class="history-list"></ul>
+      <p class="panel-hint">Tape <code>[[Titre de la note]]</code> dans le texte pour créer un lien vers une autre note.</p>
     </div>
 
     <div id="color-panel" class="side-panel hidden">

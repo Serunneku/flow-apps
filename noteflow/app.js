@@ -874,6 +874,7 @@ function loadNoteIntoEditor() {
   if (sizeSelect._customSelectRefresh) sizeSelect._customSelectRefresh();
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
+  backlinksPanel.classList.add("hidden");
   colorPanel.classList.add("hidden");
   paperPanel.classList.add("hidden");
   findPanel.classList.add("hidden");
@@ -1445,6 +1446,45 @@ function renderHistory() {
   });
 }
 
+// --- Backlinks (notes that wikilink to the currently open note) ---
+const backlinksBtn = document.getElementById("backlinks-btn");
+const backlinksPanel = document.getElementById("backlinks-panel");
+const backlinksListEl = document.getElementById("backlinks-list");
+
+backlinksBtn.addEventListener("click", () => {
+  reminderPanel.classList.add("hidden");
+  historyPanel.classList.add("hidden");
+  const opening = backlinksPanel.classList.contains("hidden");
+  backlinksPanel.classList.toggle("hidden");
+  if (opening) renderBacklinks();
+});
+
+function renderBacklinks() {
+  const needle = `data-note-id="${currentNote.id}"`;
+  const linking = notes.filter((n) => !n.deletedAt && n.id !== currentNote.id && !n.locked && (n.html || "").includes(needle));
+  backlinksListEl.innerHTML = "";
+  if (!linking.length) {
+    backlinksListEl.innerHTML = '<li class="history-empty">Aucune note ne pointe encore ici.</li>';
+    return;
+  }
+  linking.forEach((n) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = n.title || "Sans titre";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Ouvrir";
+    btn.addEventListener("click", () => {
+      backlinksPanel.classList.add("hidden");
+      goToNote(n.id);
+    });
+    li.appendChild(label);
+    li.appendChild(btn);
+    backlinksListEl.appendChild(li);
+  });
+}
+
 // --- Markdown-style shortcuts while typing ---
 // Runs on "input" (after the space is already committed to the DOM). The line
 // is converted with direct DOM moves rather than execCommand("formatBlock"/
@@ -1563,6 +1603,54 @@ textEditor.addEventListener("input", () => {
   } catch {
     /* selection edge case: skip silently */
   }
+});
+
+// --- Wikilinks: typing [[Titre]] turns into a clickable link to that note ---
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = sel.getRangeAt(0).startOffset;
+  const text = node.textContent.slice(0, offset);
+  const match = text.match(/\[\[([^[\]]+)\]\]$/);
+  if (!match) return;
+  const query = match[1].trim().toLowerCase();
+  if (!query) return;
+  const target =
+    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+  if (!target) return;
+  const full = match[0];
+  const range = document.createRange();
+  try {
+    range.setStart(node, offset - full.length);
+    range.setEnd(node, offset);
+    range.deleteContents();
+    const a = document.createElement("a");
+    a.href = "#";
+    a.className = "wikilink";
+    a.dataset.noteId = target.id;
+    a.textContent = target.title || "Sans titre";
+    range.insertNode(a);
+    const spacer = document.createTextNode("​");
+    a.parentNode.insertBefore(spacer, a.nextSibling);
+    range.setStart(spacer, 1);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    scheduleSave();
+  } catch {
+    /* selection edge case: skip silently */
+  }
+});
+
+textEditor.addEventListener("click", (e) => {
+  const link = e.target.closest("a.wikilink");
+  if (!link) return;
+  e.preventDefault();
+  const id = link.dataset.noteId;
+  if (notes.some((n) => n.id === id)) goToNote(id);
 });
 
 growPageBtn.addEventListener("click", () => {
@@ -2447,7 +2535,7 @@ document.addEventListener("keydown", (e) => {
       lockCancelBtn.click();
       return;
     }
-    [reminderPanel, historyPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
+    [reminderPanel, historyPanel, backlinksPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
   }
 
   const mod = e.metaKey || e.ctrlKey;
