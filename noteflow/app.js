@@ -4300,6 +4300,123 @@ window.addEventListener("resize", () => {
   if (!graphViewOverlay.classList.contains("hidden")) resizeGraphCanvas();
 });
 
+// --- Centralized tasks view: every checklist item across every note,
+// grouped by note, editable in place (toggling here writes straight back
+// into that note's stored html — no need to open the note itself). ---
+const tasksViewBtn = document.getElementById("tasks-view-btn");
+const tasksViewOverlay = document.getElementById("tasks-view-overlay");
+const tasksViewClose = document.getElementById("tasks-view-close");
+const tasksViewCount = document.getElementById("tasks-view-count");
+const tasksViewListEl = document.getElementById("tasks-view-list");
+const tasksHideDoneBtn = document.getElementById("tasks-hide-done-btn");
+let tasksHideDone = loadPref("noteflow.tasks.hideDone", false);
+
+function collectAllTasks() {
+  const tasks = [];
+  notes
+    .filter((n) => !n.deletedAt && !n.archivedAt && !n.locked)
+    .forEach((note) => {
+      const div = document.createElement("div");
+      div.innerHTML = note.html || "";
+      const items = div.querySelectorAll(".checklist-item");
+      items.forEach((li, index) => {
+        const cb = li.querySelector("input[type=checkbox]");
+        if (!cb) return;
+        const span = li.querySelector("span");
+        tasks.push({
+          noteId: note.id,
+          noteTitle: note.title || "Sans titre",
+          itemIndex: index,
+          checked: cb.hasAttribute("checked"),
+          text: span ? span.textContent : "",
+        });
+      });
+    });
+  return tasks;
+}
+
+function toggleTaskInNote(noteId, itemIndex) {
+  const note = notes.find((n) => n.id === noteId && !n.deletedAt);
+  if (!note) return;
+  const div = document.createElement("div");
+  div.innerHTML = note.html || "";
+  const li = div.querySelectorAll(".checklist-item")[itemIndex];
+  const cb = li && li.querySelector("input[type=checkbox]");
+  if (!cb) return;
+  if (cb.hasAttribute("checked")) cb.removeAttribute("checked");
+  else cb.setAttribute("checked", "");
+  note.html = div.innerHTML;
+  note.updatedAt = Date.now();
+  persistNote(note);
+  if (currentNote && currentNote.id === noteId) {
+    textEditor.innerHTML = sanitizeNoteHtml(note.html);
+  }
+}
+
+function renderTasksView() {
+  const all = collectAllTasks();
+  const visible = tasksHideDone ? all.filter((t) => !t.checked) : all;
+  const doneCount = all.filter((t) => t.checked).length;
+  tasksViewCount.textContent = `${all.length - doneCount}/${all.length} tâche${all.length > 1 ? "s" : ""} restante${all.length - doneCount > 1 ? "s" : ""}`;
+  tasksViewListEl.innerHTML = "";
+  if (!visible.length) {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    li.textContent = all.length ? "Toutes les tâches sont cochées." : "Aucune tâche dans le carnet.";
+    tasksViewListEl.appendChild(li);
+    return;
+  }
+  const byNote = new Map();
+  visible.forEach((t) => {
+    if (!byNote.has(t.noteId)) byNote.set(t.noteId, []);
+    byNote.get(t.noteId).push(t);
+  });
+  byNote.forEach((items, noteId) => {
+    const header = document.createElement("li");
+    header.className = "history-item tasks-note-header";
+    const noteBtn = document.createElement("button");
+    noteBtn.type = "button";
+    noteBtn.className = "link-btn";
+    noteBtn.textContent = items[0].noteTitle;
+    noteBtn.addEventListener("click", () => {
+      tasksViewOverlay.classList.add("hidden");
+      goToNote(noteId);
+    });
+    header.appendChild(noteBtn);
+    tasksViewListEl.appendChild(header);
+    items.forEach((t) => {
+      const li = document.createElement("li");
+      li.className = "history-item task-view-item";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = t.checked;
+      cb.addEventListener("change", () => {
+        toggleTaskInNote(t.noteId, t.itemIndex);
+        renderTasksView();
+      });
+      const label = document.createElement("span");
+      label.textContent = t.text;
+      label.className = t.checked ? "task-view-text task-view-done" : "task-view-text";
+      li.appendChild(cb);
+      li.appendChild(label);
+      tasksViewListEl.appendChild(li);
+    });
+  });
+}
+
+tasksViewBtn.addEventListener("click", () => {
+  showList();
+  tasksViewOverlay.classList.remove("hidden");
+  renderTasksView();
+});
+tasksViewClose.addEventListener("click", () => tasksViewOverlay.classList.add("hidden"));
+tasksHideDoneBtn.addEventListener("click", () => {
+  tasksHideDone = !tasksHideDone;
+  savePref("noteflow.tasks.hideDone", tasksHideDone);
+  setPressed(tasksHideDoneBtn, tasksHideDone);
+  renderTasksView();
+});
+
 function addBacklinksSection(title, entries, emptyText) {
   const header = document.createElement("li");
   header.className = "backlinks-section-header";
@@ -7271,6 +7388,7 @@ function cmdkActionItems(query) {
     { label: "Sélection multiple", sub: "Archiver / déplacer / supprimer plusieurs notes", action: () => { showList(); setSelectionMode(true); } },
     { label: "Note du jour", sub: "Journal", action: () => document.getElementById("journal-today-btn").click() },
     { label: "Vue graphe", sub: "", action: () => document.getElementById("graph-view-btn").click() },
+    { label: "Toutes les tâches", sub: "", action: () => document.getElementById("tasks-view-btn").click() },
   ];
   // These only make sense with a note actually open — listed here instead of
   // buried in the editor's own "..." menu, since ⌘K is meant to be the one

@@ -2579,6 +2579,46 @@ a:focus-visible,
   box-shadow: var(--shadow-hover);
 }
 
+.tasks-view-list {
+  flex: 1;
+  max-height: none;
+  overflow-y: auto;
+  padding: 8px 16px 24px;
+}
+
+.tasks-note-header {
+  border-bottom: none;
+  padding-top: 14px;
+}
+
+.tasks-note-header .link-btn {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg);
+  padding: 0;
+}
+
+.task-view-item {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  border-bottom: none;
+  padding: 4px 2px 4px 12px;
+}
+
+.task-view-item input[type="checkbox"] {
+  flex-shrink: 0;
+}
+
+.task-view-text {
+  font-size: 13px;
+}
+
+.task-view-done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
 .command-palette {
   position: fixed;
   inset: 0;
