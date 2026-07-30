@@ -238,7 +238,12 @@
       <label class="sync-label">Remplacer par
         <input id="replace-input" type="text" class="sync-code-input" placeholder="Texte de remplacement" autocomplete="off" />
       </label>
+      <div class="find-options-row">
+        <label><input type="checkbox" id="find-regex-toggle" /> Regex</label>
+        <label><input type="checkbox" id="find-scope-toggle" /> Toutes les notes</label>
+      </div>
       <p id="find-count" class="panel-hint"></p>
+      <ul id="find-scope-list" class="history-list hidden"></ul>
       <div class="sync-actions">
         <button id="replace-all-btn" type="button">Tout remplacer</button>
         <button id="find-close-btn" type="button" class="link-btn">Fermer</button>

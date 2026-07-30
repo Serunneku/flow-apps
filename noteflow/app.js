@@ -3745,22 +3745,42 @@ const findInput = document.getElementById("find-input");
 const replaceInput = document.getElementById("replace-input");
 const findCount = document.getElementById("find-count");
 const replaceAllBtn = document.getElementById("replace-all-btn");
+const findRegexToggle = document.getElementById("find-regex-toggle");
+const findScopeToggle = document.getElementById("find-scope-toggle");
+const findScopeListEl = document.getElementById("find-scope-list");
+
+function buildFindRegex(term, useRegex) {
+  try {
+    return new RegExp(useRegex ? term : term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  } catch {
+    return null;
+  }
+}
+
+function countMatchesInText(text, re) {
+  if (!re) return 0;
+  re.lastIndex = 0;
+  const matches = text.match(re);
+  return matches ? matches.length : 0;
+}
 
 function countMatches(term) {
-  if (!term) return 0;
-  const text = textEditor.textContent.toLowerCase();
-  const needle = term.toLowerCase();
-  let count = 0;
-  let pos = 0;
-  while ((pos = text.indexOf(needle, pos)) !== -1) {
-    count++;
-    pos += needle.length;
-  }
-  return count;
+  const re = buildFindRegex(term, findRegexToggle.checked);
+  return countMatchesInText(textEditor.textContent, re);
 }
+
+// Multi-note scope keeps a checked-in/out selection per note id so the user
+// can review which notes actually match before committing a bulk replace,
+// rather than the old single-note "Tout remplacer" going in blind.
+let findScopeSelection = new Map();
 
 function updateFindCount() {
   const term = findInput.value;
+  if (findScopeToggle.checked) {
+    renderFindScopeList(term);
+    return;
+  }
+  findScopeListEl.classList.add("hidden");
   if (!term) {
     findCount.textContent = "";
     return;
@@ -3769,7 +3789,49 @@ function updateFindCount() {
   findCount.textContent = n ? `${n} résultat${n > 1 ? "s" : ""}` : "Aucun résultat";
 }
 
+function renderFindScopeList(term) {
+  findScopeListEl.classList.remove("hidden");
+  findScopeListEl.innerHTML = "";
+  if (!term) {
+    findCount.textContent = "";
+    return;
+  }
+  const re = buildFindRegex(term, findRegexToggle.checked);
+  if (!re) {
+    findCount.textContent = "Regex invalide";
+    return;
+  }
+  const matches = notes
+    .filter((n) => !n.deletedAt && !n.locked)
+    .map((n) => ({ note: n, count: countMatchesInText(stripHtml(n.html), re) }))
+    .filter((m) => m.count > 0);
+  findCount.textContent = matches.length
+    ? `${matches.length} note${matches.length > 1 ? "s" : ""} concernée${matches.length > 1 ? "s" : ""}`
+    : "Aucun résultat";
+  matches.forEach(({ note, count }) => {
+    if (!findScopeSelection.has(note.id)) findScopeSelection.set(note.id, true);
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("label");
+    label.style.display = "flex";
+    label.style.alignItems = "center";
+    label.style.gap = "8px";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = findScopeSelection.get(note.id);
+    cb.addEventListener("change", () => findScopeSelection.set(note.id, cb.checked));
+    const span = document.createElement("span");
+    span.textContent = `${note.title || "Sans titre"} (${count})`;
+    label.appendChild(cb);
+    label.appendChild(span);
+    li.appendChild(label);
+    findScopeListEl.appendChild(li);
+  });
+}
+
 findInput.addEventListener("input", updateFindCount);
+findRegexToggle.addEventListener("change", updateFindCount);
+findScopeToggle.addEventListener("change", updateFindCount);
 
 document.getElementById("find-btn").addEventListener("click", () => {
   findPanel.classList.toggle("hidden");
@@ -3780,27 +3842,73 @@ document.getElementById("find-btn").addEventListener("click", () => {
 });
 document.getElementById("find-close-btn").addEventListener("click", () => findPanel.classList.add("hidden"));
 
-replaceAllBtn.addEventListener("click", () => {
-  const term = findInput.value;
-  if (!term) return;
-  const replacement = replaceInput.value;
-  // Undoable via the version history panel, since there's no confirmation
-  // step before a bulk replace goes through.
-  pushHistorySnapshot();
-  const walker = document.createTreeWalker(textEditor, NodeFilter.SHOW_TEXT);
-  const needle = term.toLowerCase();
-  let replaced = 0;
+// Runs a compiled regex replacement across an arbitrary HTML string's text
+// nodes (not the live editor), preserving formatting — used both for the
+// current note and for every other note in multi-note scope, since those
+// aren't loaded into textEditor.
+function replaceInHtml(html, re, replacement) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
   const nodes = [];
   let node;
   while ((node = walker.nextNode())) nodes.push(node);
+  let replaced = 0;
   nodes.forEach((n) => {
-    if (n.textContent.toLowerCase().includes(needle)) {
-      const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-      const matches = n.textContent.match(re);
-      if (matches) replaced += matches.length;
+    re.lastIndex = 0;
+    const matches = n.textContent.match(re);
+    if (matches) {
+      replaced += matches.length;
       n.textContent = n.textContent.replace(re, replacement);
     }
   });
+  return { html: container.innerHTML, replaced };
+}
+
+replaceAllBtn.addEventListener("click", async () => {
+  const term = findInput.value;
+  if (!term) return;
+  const replacement = replaceInput.value;
+  const re = buildFindRegex(term, findRegexToggle.checked);
+  if (!re) {
+    showToast("Regex invalide");
+    return;
+  }
+
+  if (findScopeToggle.checked) {
+    const targets = notes.filter((n) => !n.deletedAt && !n.locked && findScopeSelection.get(n.id));
+    let totalReplaced = 0;
+    let notesTouched = 0;
+    for (const note of targets) {
+      const { html, replaced } = replaceInHtml(note.html, re, replacement);
+      if (!replaced) continue;
+      if (!note.history) note.history = [];
+      note.history.push({ title: note.title, html: stripImagesForHistory(note.html), ts: Date.now() });
+      if (note.history.length > 20) {
+        const dropIndex = note.history.findIndex((s) => !s.pinned);
+        if (dropIndex !== -1) note.history.splice(dropIndex, 1);
+      }
+      note.html = html;
+      note.updatedAt = Date.now();
+      await persistNote(note);
+      totalReplaced += replaced;
+      notesTouched++;
+      if (currentNote && currentNote.id === note.id && editorScreen.classList.contains("active")) {
+        textEditor.innerHTML = note.html;
+        updateWordCount();
+      }
+    }
+    renderList();
+    updateFindCount();
+    showToast(totalReplaced ? `${totalReplaced} remplacement(s) dans ${notesTouched} note(s)` : "Aucun résultat");
+    return;
+  }
+
+  // Undoable via the version history panel, since there's no confirmation
+  // step before a bulk replace goes through.
+  pushHistorySnapshot();
+  const { html, replaced } = replaceInHtml(textEditor.innerHTML, re, replacement);
+  textEditor.innerHTML = html;
   scheduleSave();
   updateWordCount();
   updateFindCount();
