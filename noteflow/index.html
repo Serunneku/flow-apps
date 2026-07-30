@@ -177,6 +177,7 @@
             <button class="menu-item" id="history-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Historique des versions</button>
             <button class="menu-item" id="backlinks-btn" type="button"><svg class="icon"><use href="#icon-link"/></svg>Notes liées</button>
             <button class="menu-item" id="outline-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Sommaire</button>
+            <button class="menu-item" id="split-view-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Volet secondaire</button>
             <button class="menu-item" id="lock-btn" type="button"><svg class="icon"><use href="#icon-lock-open"/></svg>Verrouiller</button>
             <button class="menu-item" id="biometric-setup-btn" type="button"><svg class="icon"><use href="#icon-lock-closed"/></svg>Activer Face ID / empreinte</button>
             <button class="menu-item" id="print-btn" type="button"><svg class="icon"><use href="#icon-print"/></svg>Imprimer / PDF</button>
@@ -358,16 +359,26 @@
     </div>
     <p class="draw-hint hidden" id="draw-hint">Dessine ou surligne directement sur ta page : le texte reste visible en dessous.</p>
 
-    <div class="page-scroll" id="page-scroll">
-      <div id="note-page" class="note-page">
-        <canvas id="draw-canvas"></canvas>
-        <div id="text-editor" class="text-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Contenu de la note" data-placeholder="Écris ta note ici…" spellcheck="true" autocorrect="on" autocapitalize="sentences"></div>
-        <ul id="wikilink-autocomplete" class="wikilink-autocomplete hidden" role="listbox"></ul>
-        <span id="page-folio" class="page-folio hidden" aria-hidden="true"></span>
-        <div id="corner-fold" class="corner-fold" aria-hidden="true"></div>
-        <div id="bookmark-ribbon" class="bookmark-ribbon hidden" aria-hidden="true"></div>
+    <div class="editor-body" id="editor-body">
+      <div class="page-scroll" id="page-scroll">
+        <div id="note-page" class="note-page">
+          <canvas id="draw-canvas"></canvas>
+          <div id="text-editor" class="text-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Contenu de la note" data-placeholder="Écris ta note ici…" spellcheck="true" autocorrect="on" autocapitalize="sentences"></div>
+          <ul id="wikilink-autocomplete" class="wikilink-autocomplete hidden" role="listbox"></ul>
+          <span id="page-folio" class="page-folio hidden" aria-hidden="true"></span>
+          <div id="corner-fold" class="corner-fold" aria-hidden="true"></div>
+          <div id="bookmark-ribbon" class="bookmark-ribbon hidden" aria-hidden="true"></div>
+        </div>
+        <button type="button" id="grow-page-btn" class="grow-page-btn">+ Agrandir la page</button>
       </div>
-      <button type="button" id="grow-page-btn" class="grow-page-btn">+ Agrandir la page</button>
+      <div id="split-view-pane" class="split-view-pane hidden">
+        <div class="split-view-header">
+          <input id="split-view-search" type="text" class="sync-code-input" placeholder="Afficher une autre note ici…" autocomplete="off" />
+          <button type="button" id="split-view-close" class="icon-btn" title="Fermer le volet"><svg class="icon"><use href="#icon-close"/></svg></button>
+        </div>
+        <ul id="split-view-results" class="cmdk-list split-view-results hidden"></ul>
+        <div id="split-view-content" class="split-view-content"></div>
+      </div>
     </div>
   </section>
 

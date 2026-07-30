@@ -573,6 +573,7 @@ function showList() {
   listScreen.classList.add("active");
   editorScreen.classList.remove("active");
   stopAmbientFocusSound();
+  document.getElementById("split-view-pane").classList.add("hidden");
   renderList();
 }
 
@@ -3171,6 +3172,77 @@ function renderOutline() {
   });
 }
 
+// --- Split view: a read-only reference pane showing a second note beside
+// the one being edited — mono-user, entirely local, for copying from or
+// checking a source while writing, without leaving the editor. Read-only on
+// purpose: two live contenteditable regions autosaving independently would
+// multiply every edge case (history snapshots, wikilink autocomplete, drawing
+// canvas sizing…) for a "peek at another note" feature that doesn't need it. ---
+const splitViewBtn = document.getElementById("split-view-btn");
+const splitViewPane = document.getElementById("split-view-pane");
+const splitViewSearch = document.getElementById("split-view-search");
+const splitViewResults = document.getElementById("split-view-results");
+const splitViewContent = document.getElementById("split-view-content");
+let splitViewNoteId = null;
+
+function renderSplitViewContent() {
+  const note = notes.find((n) => n.id === splitViewNoteId && !n.deletedAt);
+  if (!note) {
+    splitViewContent.innerHTML = '<p class="split-view-empty">Choisis une note ci-dessus.</p>';
+    return;
+  }
+  if (note.locked) {
+    splitViewContent.innerHTML = '<p class="split-view-empty">Cette note est verrouillée.</p>';
+    return;
+  }
+  splitViewContent.innerHTML = `<p><strong>${escapeHtml(note.title || "Sans titre")}</strong></p>` + (sanitizeNoteHtml(note.html) || "");
+}
+
+function openInSplitView(noteId) {
+  splitViewNoteId = noteId;
+  splitViewPane.classList.remove("hidden");
+  splitViewResults.classList.add("hidden");
+  splitViewSearch.value = "";
+  renderSplitViewContent();
+}
+
+splitViewSearch.addEventListener("input", () => {
+  const q = splitViewSearch.value.trim().toLowerCase();
+  if (!q) {
+    splitViewResults.classList.add("hidden");
+    return;
+  }
+  const matches = notes
+    .filter((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "sans titre").toLowerCase().includes(q))
+    .slice(0, 8);
+  splitViewResults.innerHTML = "";
+  matches.forEach((n) => {
+    const li = document.createElement("li");
+    li.className = "cmdk-item";
+    li.innerHTML = `<span class="cmdk-item-label"></span>`;
+    li.querySelector(".cmdk-item-label").textContent = n.locked ? "🔒 " + (n.title || "Sans titre") : n.title || "Sans titre";
+    li.addEventListener("click", () => openInSplitView(n.id));
+    splitViewResults.appendChild(li);
+  });
+  splitViewResults.classList.toggle("hidden", !matches.length);
+});
+
+document.getElementById("split-view-close").addEventListener("click", () => {
+  splitViewPane.classList.add("hidden");
+  splitViewNoteId = null;
+});
+
+splitViewBtn.addEventListener("click", () => {
+  const opening = splitViewPane.classList.contains("hidden");
+  if (opening) {
+    splitViewPane.classList.remove("hidden");
+    renderSplitViewContent();
+    setTimeout(() => splitViewSearch.focus(), 30);
+  } else {
+    splitViewPane.classList.add("hidden");
+  }
+});
+
 outlineBtn.addEventListener("click", () => {
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
@@ -5311,6 +5383,8 @@ function cmdkActionItems(query) {
       { label: "Mode dessin & surlignage", sub: "", action: () => modeDrawBtn.click() },
       { label: "Mode focus", sub: "", action: () => focusBtn.click() },
       { label: "Rechercher / remplacer", sub: "Dans cette note", action: () => document.getElementById("find-btn").click() },
+      { label: "Sommaire", sub: "", action: () => document.getElementById("outline-btn").click() },
+      { label: "Volet secondaire", sub: "Voir une autre note à côté", action: () => document.getElementById("split-view-btn").click() },
       { label: "Archiver la note", sub: "", action: () => archiveBtn.click() },
       { label: "Supprimer la note", sub: "", action: () => deleteNoteBtn.click() }
     );

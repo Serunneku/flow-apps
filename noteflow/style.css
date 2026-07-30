@@ -1630,10 +1630,74 @@ select option {
   background: var(--accent);
 }
 
+.editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
 .page-scroll {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: 4px 4px 24px;
+}
+
+.split-view-pane {
+  flex: 1;
+  min-width: 0;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.split-view-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.split-view-header input {
+  flex: 1;
+}
+
+.split-view-results {
+  max-height: 160px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.split-view-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--paper);
+  color: var(--paper-text);
+  border-radius: var(--radius);
+  font-size: 0.95em;
+}
+
+.split-view-content .split-view-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .editor-body {
+    flex-direction: column;
+  }
+  .split-view-pane {
+    max-width: none;
+    max-height: 45vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
 }
 
 .note-page {
