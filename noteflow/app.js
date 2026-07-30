@@ -1759,6 +1759,9 @@ function loadNoteIntoEditor() {
   reminderInput.value = currentNote.reminderAt ? toLocalDatetimeValue(currentNote.reminderAt) : "";
   reminderRecurSelect.value = currentNote.reminderRecur || "";
   editorScreen.classList.remove("focus-mode");
+  editorScreen.classList.remove("reading-mode");
+  textEditor.contentEditable = "true";
+  document.getElementById("reading-progress").classList.add("hidden");
   stopAmbientFocusSound();
   notePage.style.backgroundColor = currentNote.color || "";
   notePage.dataset.paper = currentNote.paperStyle || "blank";
@@ -2447,6 +2450,29 @@ focusBtn.addEventListener("click", () => {
     notePage.style.removeProperty("--grain-y");
   }
 });
+
+// --- Reading mode: a consultation view (wider measure, taller line-height,
+// chrome hidden, reading-progress bar), distinct from focus mode which is a
+// *writing* mode (gold frame, ambient sound, editor stays fully live). ---
+const readingModeBtn = document.getElementById("reading-mode-btn");
+const readingProgressEl = document.getElementById("reading-progress");
+const readingProgressFillEl = document.getElementById("reading-progress-fill");
+
+function updateReadingProgress() {
+  if (!editorScreen.classList.contains("reading-mode")) return;
+  const scrollable = pageScrollEl.scrollHeight - pageScrollEl.clientHeight;
+  const pct = scrollable > 0 ? Math.min(100, Math.max(0, (pageScrollEl.scrollTop / scrollable) * 100)) : 100;
+  readingProgressFillEl.style.width = `${pct}%`;
+}
+
+readingModeBtn.addEventListener("click", () => {
+  const entering = editorScreen.classList.toggle("reading-mode");
+  textEditor.contentEditable = entering ? "false" : "true";
+  readingProgressEl.classList.toggle("hidden", !entering);
+  if (entering) updateReadingProgress();
+});
+
+pageScrollEl.addEventListener("scroll", updateReadingProgress);
 
 // The paper grain drifts a couple pixels against the cursor in focus mode —
 // like a sheet of paper on a desk, viewed from a slightly shifting angle.
@@ -5509,6 +5535,7 @@ function cmdkActionItems(query) {
       { label: "Exporter cette note", sub: "JSON", action: () => document.getElementById("export-note-btn").click() },
       { label: "Mode dessin & surlignage", sub: "", action: () => modeDrawBtn.click() },
       { label: "Mode focus", sub: "", action: () => focusBtn.click() },
+      { label: "Mode lecture", sub: "", action: () => readingModeBtn.click() },
       { label: "Rechercher / remplacer", sub: "Dans cette note", action: () => document.getElementById("find-btn").click() },
       { label: "Sommaire", sub: "", action: () => document.getElementById("outline-btn").click() },
       { label: "Volet secondaire", sub: "Voir une autre note à côté", action: () => document.getElementById("split-view-btn").click() },

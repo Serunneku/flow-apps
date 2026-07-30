@@ -1631,6 +1631,7 @@ select option {
 }
 
 .editor-body {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -2234,6 +2235,60 @@ a:focus-visible,
   background: var(--accent);
   color: var(--accent-text);
   border-color: var(--accent);
+}
+
+/* Reading mode: wider measure, taller line-height, chrome hidden — a
+   consultation view, not a writing ritual (no frame, no ambient sound, the
+   split-view pane and secondary panels stay reachable). */
+#editor-screen.reading-mode .folder-row,
+#editor-screen.reading-mode .mode-switch,
+#editor-screen.reading-mode #format-toolbar,
+#editor-screen.reading-mode #draw-toolbar,
+#editor-screen.reading-mode .draw-hint,
+#editor-screen.reading-mode .grow-page-btn {
+  display: none !important;
+}
+
+#editor-screen.reading-mode .note-page {
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+#editor-screen.reading-mode .text-editor {
+  font-size: 1.12em;
+  line-height: 1.85;
+  cursor: default;
+}
+
+#editor-screen.reading-mode .title-input {
+  text-align: center;
+  pointer-events: none;
+}
+
+#reading-mode-btn.active,
+#editor-screen.reading-mode #reading-mode-btn {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.reading-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 3;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.reading-progress span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--gold);
+  transition: width 0.15s linear;
 }
 
 /* A discreet gold-rimmed frame + a faint cinematic vignette at the screen
