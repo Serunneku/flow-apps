@@ -91,6 +91,38 @@ let listView = "active"; // "active" | "archived" | "trash"
 let selectionMode = false;
 let selectedIds = new Set();
 
+// --- Vaults: fully separate note collections within the same install (e.g.
+// "Pro" / "Perso"). All notes stay in one array/one IndexedDB store — a
+// vault is just a partition tag (note.vaultId) plus a filter applied at
+// every point notes get discovered by title/tag/folder rather than by a
+// specific id already known to belong to the current vault. ---
+const VAULTS_KEY = "noteflow.vaults";
+const ACTIVE_VAULT_KEY = "noteflow.activeVaultId";
+const DEFAULT_VAULT_ID = "default";
+function loadVaults() {
+  const list = loadPref(VAULTS_KEY, null);
+  if (Array.isArray(list) && list.length) return list;
+  return [{ id: DEFAULT_VAULT_ID, name: "Principal" }];
+}
+function saveVaults(list) {
+  savePref(VAULTS_KEY, list);
+}
+let vaults = loadVaults();
+let activeVaultId = loadPref(ACTIVE_VAULT_KEY, DEFAULT_VAULT_ID);
+if (!vaults.find((v) => v.id === activeVaultId)) activeVaultId = vaults[0].id;
+function setActiveVault(id) {
+  activeVaultId = id;
+  savePref(ACTIVE_VAULT_KEY, id);
+  activeFolderFilter = null;
+  activeTagFilter = null;
+  searchQuery = "";
+  if (searchInput) searchInput.value = "";
+  renderList();
+}
+function notesInActiveVault() {
+  return notes.filter((n) => (n.vaultId || DEFAULT_VAULT_ID) === activeVaultId);
+}
+
 // --- Synthesized sound design (off by default — a note app should never
 // make noise without being asked to) ---
 let soundEnabled = loadPref(PREF_KEYS.sound, false);
@@ -890,11 +922,11 @@ function folderDisplayColor(folder) {
 }
 
 function allFolders() {
-  return [...new Set(notes.map((n) => n.folder).filter(Boolean))];
+  return [...new Set(notesInActiveVault().map((n) => n.folder).filter(Boolean))];
 }
 
 function allTags() {
-  return [...new Set(notes.flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
+  return [...new Set(notesInActiveVault().flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
 }
 
 // --- Global tag manager: rename (or merge, by renaming to an existing tag)
@@ -1204,7 +1236,7 @@ function renderFolderFilters() {
   // means tens of thousands of comparisons on every render, including on
   // every keystroke in the search box).
   const exactCounts = new Map();
-  notes.forEach((n) => {
+  notesInActiveVault().forEach((n) => {
     if (n.deletedAt || !n.folder) return;
     exactCounts.set(n.folder, (exactCounts.get(n.folder) || 0) + 1);
   });
@@ -1581,6 +1613,7 @@ function renderList() {
     .join(" ")
     .trim();
   const scopeFiltered = notes.filter((n) => {
+    if ((n.vaultId || DEFAULT_VAULT_ID) !== activeVaultId) return false;
     if (listView === "trash" && !n.deletedAt) return false;
     if (listView === "archived" && (!n.archived || n.deletedAt)) return false;
     if (listView === "active" && (n.archived || n.deletedAt)) return false;
@@ -1936,6 +1969,7 @@ function newNoteObject() {
   const now = Date.now();
   return {
     id: crypto.randomUUID(),
+    vaultId: activeVaultId,
     title: "",
     html: "",
     folder: "",
@@ -4068,7 +4102,7 @@ let graphLastPointer = null;
 let graphHoverNode = null;
 
 function buildGraphData() {
-  const active = notes.filter((n) => !n.deletedAt && !n.locked);
+  const active = notesInActiveVault().filter((n) => !n.deletedAt && !n.locked);
   const idSet = new Set(active.map((n) => n.id));
   const degree = new Map();
   const edges = [];
@@ -4313,7 +4347,7 @@ let tasksHideDone = loadPref("noteflow.tasks.hideDone", false);
 
 function collectAllTasks() {
   const tasks = [];
-  notes
+  notesInActiveVault()
     .filter((n) => !n.deletedAt && !n.archivedAt && !n.locked)
     .forEach((note) => {
       const div = document.createElement("div");
@@ -4416,6 +4450,99 @@ tasksHideDoneBtn.addEventListener("click", () => {
   setPressed(tasksHideDoneBtn, tasksHideDone);
   renderTasksView();
 });
+
+// --- Vaults panel: switch/create/rename/delete workspaces. ---
+const vaultsBtn = document.getElementById("vaults-btn");
+const vaultsBtnCurrent = document.getElementById("vaults-btn-current");
+const vaultsPanel = document.getElementById("vaults-panel");
+const vaultsListEl = document.getElementById("vaults-list");
+const vaultCreateBtn = document.getElementById("vault-create-btn");
+
+function updateVaultsBtnLabel() {
+  const current = vaults.find((v) => v.id === activeVaultId);
+  vaultsBtnCurrent.textContent = current ? current.name : "";
+}
+
+function renderVaultsPanel() {
+  vaultsListEl.innerHTML = "";
+  vaults.forEach((vault) => {
+    const li = document.createElement("li");
+    li.className = "history-item history-row";
+    const label = document.createElement("span");
+    label.textContent = (vault.id === activeVaultId ? "✓ " : "") + vault.name;
+    const actions = document.createElement("div");
+    const switchBtn = document.createElement("button");
+    switchBtn.type = "button";
+    switchBtn.className = "link-btn";
+    switchBtn.textContent = "Ouvrir";
+    switchBtn.disabled = vault.id === activeVaultId;
+    switchBtn.addEventListener("click", () => {
+      setActiveVault(vault.id);
+      updateVaultsBtnLabel();
+      renderVaultsPanel();
+      showToast(`Espace « ${vault.name} » ouvert`);
+    });
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "link-btn";
+    renameBtn.textContent = "Renommer";
+    renameBtn.addEventListener("click", () => {
+      const name = window.prompt("Nouveau nom :", vault.name);
+      if (!name || !name.trim()) return;
+      vault.name = name.trim();
+      saveVaults(vaults);
+      updateVaultsBtnLabel();
+      renderVaultsPanel();
+    });
+    actions.appendChild(switchBtn);
+    actions.appendChild(renameBtn);
+    if (vaults.length > 1) {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "link-btn danger";
+      deleteBtn.textContent = "Supprimer";
+      deleteBtn.addEventListener("click", () => {
+        const fallback = vaults.find((v) => v.id !== vault.id);
+        if (!window.confirm(`Supprimer l'espace « ${vault.name} » ? Ses notes seront déplacées vers « ${fallback.name} ».`)) return;
+        notes.forEach((n) => {
+          if ((n.vaultId || DEFAULT_VAULT_ID) === vault.id) {
+            n.vaultId = fallback.id;
+            persistNote(n);
+          }
+        });
+        vaults = vaults.filter((v) => v.id !== vault.id);
+        saveVaults(vaults);
+        if (activeVaultId === vault.id) setActiveVault(fallback.id);
+        else renderList();
+        updateVaultsBtnLabel();
+        renderVaultsPanel();
+        showToast(`Espace « ${vault.name} » supprimé`);
+      });
+      actions.appendChild(deleteBtn);
+    }
+    li.appendChild(label);
+    li.appendChild(actions);
+    vaultsListEl.appendChild(li);
+  });
+}
+
+vaultsBtn.addEventListener("click", () => {
+  const opening = vaultsPanel.classList.contains("hidden");
+  vaultsPanel.classList.toggle("hidden");
+  if (opening) renderVaultsPanel();
+});
+vaultCreateBtn.addEventListener("click", () => {
+  const name = window.prompt("Nom du nouvel espace de travail :", "");
+  if (!name || !name.trim()) return;
+  const vault = { id: crypto.randomUUID(), name: name.trim() };
+  vaults.push(vault);
+  saveVaults(vaults);
+  setActiveVault(vault.id);
+  updateVaultsBtnLabel();
+  renderVaultsPanel();
+  showToast(`Espace « ${vault.name} » créé`);
+});
+updateVaultsBtnLabel();
 
 function addBacklinksSection(title, entries, emptyText) {
   const header = document.createElement("li");
@@ -4714,7 +4841,7 @@ async function chooseWikilinkAutocomplete(index) {
 
 function renderWikilinkAutocomplete(node, start, query) {
   const q = query.trim().toLowerCase();
-  const matches = notes
+  const matches = notesInActiveVault()
     .filter((n) => !n.deletedAt && n.id !== currentNote.id)
     .filter((n) => !q || (n.title || "").toLowerCase().includes(q))
     .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -4765,8 +4892,8 @@ textEditor.addEventListener("input", () => {
     const query = closedMatch[1].trim().toLowerCase();
     if (!query) return;
     const target =
-      notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
-      notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+      notesInActiveVault().find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+      notesInActiveVault().find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
     if (!target) return;
     insertWikilinkAt(node, offset - closedMatch[0].length, offset, target);
     return;
@@ -4942,8 +5069,8 @@ textEditor.addEventListener("input", () => {
   const query = queryTitle.toLowerCase();
   if (!query) return;
   const target =
-    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
-    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+    notesInActiveVault().find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+    notesInActiveVault().find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
   if (!target) return;
   const full = match[0];
   const range = document.createRange();
@@ -6666,7 +6793,7 @@ webdavDisableBtn.addEventListener("click", () => {
 // journalDate (not by title, so renaming a day's entry doesn't orphan it)
 // with a mini calendar to jump to any date and see which days have one. ---
 async function openOrCreateJournalNote(dateStr) {
-  let note = notes.find((n) => !n.deletedAt && n.journalDate === dateStr);
+  let note = notesInActiveVault().find((n) => !n.deletedAt && n.journalDate === dateStr);
   if (!note) {
     note = newNoteObject();
     note.journalDate = dateStr;
@@ -6692,7 +6819,7 @@ function renderJournalCalendar() {
   const year = journalCalViewDate.getFullYear();
   const month = journalCalViewDate.getMonth();
   journalCalMonthLabel.textContent = journalCalViewDate.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
-  const entryDates = new Set(notes.filter((n) => !n.deletedAt && n.journalDate).map((n) => n.journalDate));
+  const entryDates = new Set(notesInActiveVault().filter((n) => !n.deletedAt && n.journalDate).map((n) => n.journalDate));
   const firstOfMonth = new Date(year, month, 1);
   const startWeekday = (firstOfMonth.getDay() + 6) % 7; // Monday-first
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -7431,7 +7558,7 @@ function renderCmdkResults(rawQuery) {
       .filter((t) => !q || t.toLowerCase().includes(q))
       .map((t) => ({
         label: "#" + t,
-        sub: `${notes.filter((n) => !n.deletedAt && (n.tags || []).includes(t)).length} note(s)`,
+        sub: `${notesInActiveVault().filter((n) => !n.deletedAt && (n.tags || []).includes(t)).length} note(s)`,
         action: () => {
           showList();
           activeTagFilter = t;
@@ -7444,7 +7571,7 @@ function renderCmdkResults(rawQuery) {
       .filter((f) => !q || f.toLowerCase().includes(q))
       .map((f) => ({
         label: f,
-        sub: `${notes.filter((n) => !n.deletedAt && (n.folder === f || (n.folder || "").startsWith(f + "/"))).length} note(s)`,
+        sub: `${notesInActiveVault().filter((n) => !n.deletedAt && (n.folder === f || (n.folder || "").startsWith(f + "/"))).length} note(s)`,
         action: () => {
           showList();
           activeFolderFilter = f;
@@ -7455,12 +7582,12 @@ function renderCmdkResults(rawQuery) {
   } else if (mode === ">") {
     cmdkItems = cmdkActionItems(q);
   } else {
-    let candidateNotes = notes.filter((n) => !n.deletedAt);
+    let candidateNotes = notesInActiveVault().filter((n) => !n.deletedAt);
     if (!q) {
       const recentIds = loadPref(RECENT_NOTES_KEY, []);
       const recentSet = new Set(recentIds);
-      candidateNotes = recentIds.map((id) => notes.find((n) => n.id === id && !n.deletedAt)).filter(Boolean);
-      if (!candidateNotes.length) candidateNotes = notes.filter((n) => !n.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
+      candidateNotes = recentIds.map((id) => notes.find((n) => n.id === id && !n.deletedAt && (n.vaultId || DEFAULT_VAULT_ID) === activeVaultId)).filter(Boolean);
+      if (!candidateNotes.length) candidateNotes = notesInActiveVault().filter((n) => !n.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
     } else {
       candidateNotes = candidateNotes
         .filter((n) => {

@@ -96,6 +96,7 @@
             <button class="menu-item" id="replay-onboarding-btn" type="button"><svg class="icon"><use href="#icon-star"/></svg>Revoir le tutoriel</button>
             <button class="menu-item" id="graph-view-btn" type="button"><svg class="icon"><use href="#icon-link"/></svg>Vue graphe</button>
             <button class="menu-item" id="tasks-view-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Toutes les tâches</button>
+            <button class="menu-item" id="vaults-btn" type="button"><svg class="icon"><use href="#icon-archive"/></svg>Espaces de travail<span id="vaults-btn-current" class="menu-item-sub"></span></button>
             <button class="menu-item" id="templates-btn" type="button"><svg class="icon"><use href="#icon-duplicate"/></svg>Nouvelle note depuis un modèle</button>
             <button class="menu-item" id="manage-templates-btn" type="button"><svg class="icon"><use href="#icon-duplicate"/></svg>Gérer les modèles</button>
             <button class="menu-item" id="sound-toggle-btn" type="button"><svg class="icon"><use href="#icon-sound"/></svg>Sons</button>
@@ -203,6 +204,13 @@
       <p class="sync-status">Gérer les modèles</p>
       <ul id="manage-templates-list" class="history-list"></ul>
       <p class="panel-hint">Ouvre une note et choisis "Enregistrer comme modèle" dans son menu pour en créer un nouveau.</p>
+    </div>
+
+    <div id="vaults-panel" class="side-panel hidden">
+      <p class="sync-status">Espaces de travail</p>
+      <ul id="vaults-list" class="history-list"></ul>
+      <button type="button" id="vault-create-btn" class="link-btn">+ Nouvel espace de travail</button>
+      <p class="panel-hint">Chaque espace a ses propres notes, dossiers et tags — totalement séparés des autres.</p>
     </div>
 
     <div id="hygiene-panel" class="side-panel hidden">
