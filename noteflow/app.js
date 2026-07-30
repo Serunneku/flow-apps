@@ -562,6 +562,7 @@ function showList() {
   if (activeRecorder && activeRecorder.state === "recording") {
     activeRecorder.stop();
   }
+  flushSplitViewSave();
   // Leaving a locked note's editor always re-locks it in memory too: its
   // plaintext body/drawing/history are dropped and the unlock key forgotten,
   // so reopening it requires the PIN again, exactly like before encryption.
@@ -3790,20 +3791,39 @@ function renderOutline() {
 }
 
 // --- Split view: a read-only reference pane showing a second note beside
-// the one being edited — mono-user, entirely local, for copying from or
-// checking a source while writing, without leaving the editor. Read-only on
-// purpose: two live contenteditable regions autosaving independently would
-// multiply every edge case (history snapshots, wikilink autocomplete, drawing
-// canvas sizing…) for a "peek at another note" feature that doesn't need it. ---
+// the one being edited — mono-user, entirely local, for consulting or
+// actually editing a source note side by side while writing the main one,
+// without leaving the editor. Its own independent autosave debounce (not
+// currentNote/textEditor's) keeps it fully decoupled from the main editor's
+// state — no shared history snapshots, wikilink autocomplete, or drawing
+// canvas, on purpose: those stay exclusive to the primary, full-featured
+// editor, this pane is deliberately a lighter-weight second view. ---
 const splitViewBtn = document.getElementById("split-view-btn");
 const splitViewPane = document.getElementById("split-view-pane");
 const splitViewSearch = document.getElementById("split-view-search");
 const splitViewResults = document.getElementById("split-view-results");
 const splitViewContent = document.getElementById("split-view-content");
+const splitViewEditToggle = document.getElementById("split-view-edit-toggle");
 let splitViewNoteId = null;
+let splitViewEditable = false;
+let splitViewSaveTimer = null;
+
+function flushSplitViewSave() {
+  clearTimeout(splitViewSaveTimer);
+  if (!splitViewEditable || !splitViewNoteId) return;
+  const note = notes.find((n) => n.id === splitViewNoteId);
+  if (!note) return;
+  const body = splitViewContent.querySelector(".split-view-editable");
+  if (!body) return;
+  note.html = sanitizeNoteHtml(body.innerHTML);
+  note.updatedAt = Date.now();
+  persistNote(note);
+  if (listScreen.classList.contains("active")) renderList();
+}
 
 function renderSplitViewContent() {
   const note = notes.find((n) => n.id === splitViewNoteId && !n.deletedAt);
+  splitViewEditToggle.classList.toggle("hidden", !note || note.locked);
   if (!note) {
     splitViewContent.innerHTML = '<p class="split-view-empty">Choisis une note ci-dessus.</p>';
     return;
@@ -3812,11 +3832,27 @@ function renderSplitViewContent() {
     splitViewContent.innerHTML = '<p class="split-view-empty">Cette note est verrouillée.</p>';
     return;
   }
-  splitViewContent.innerHTML = `<p><strong>${escapeHtml(note.title || "Sans titre")}</strong></p>` + (sanitizeNoteHtml(note.html) || "");
+  splitViewContent.innerHTML = `<p><strong>${escapeHtml(note.title || "Sans titre")}</strong></p><div class="split-view-editable"></div>`;
+  const body = splitViewContent.querySelector(".split-view-editable");
+  body.innerHTML = sanitizeNoteHtml(note.html) || "";
+  body.contentEditable = splitViewEditable ? "true" : "false";
+  body.addEventListener("input", () => {
+    clearTimeout(splitViewSaveTimer);
+    splitViewSaveTimer = setTimeout(flushSplitViewSave, 500);
+  });
+  splitViewEditToggle.textContent = splitViewEditable ? "Lecture seule" : "Modifier";
 }
 
+splitViewEditToggle.addEventListener("click", () => {
+  flushSplitViewSave();
+  splitViewEditable = !splitViewEditable;
+  renderSplitViewContent();
+});
+
 function openInSplitView(noteId) {
+  flushSplitViewSave();
   splitViewNoteId = noteId;
+  splitViewEditable = false;
   splitViewPane.classList.remove("hidden");
   splitViewResults.classList.add("hidden");
   splitViewSearch.value = "";
@@ -3845,6 +3881,7 @@ splitViewSearch.addEventListener("input", () => {
 });
 
 document.getElementById("split-view-close").addEventListener("click", () => {
+  flushSplitViewSave();
   splitViewPane.classList.add("hidden");
   splitViewNoteId = null;
 });
@@ -3856,6 +3893,7 @@ splitViewBtn.addEventListener("click", () => {
     renderSplitViewContent();
     setTimeout(() => splitViewSearch.focus(), 30);
   } else {
+    flushSplitViewSave();
     splitViewPane.classList.add("hidden");
   }
 });
