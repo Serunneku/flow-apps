@@ -291,6 +291,12 @@ body {
   padding: 0 10px;
 }
 
+#conflict-btn {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
 .topbar-actions {
   display: flex;
   flex-wrap: wrap;

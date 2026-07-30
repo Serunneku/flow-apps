@@ -1956,6 +1956,7 @@ function newNoteObject() {
     properties: {},
     journalDate: null,
     lastOpenedAt: null,
+    lastSyncedAt: null,
     reminderAt: null,
     reminderRecur: null,
     expiresAt: null,
@@ -6262,6 +6263,20 @@ async function handleRemoteSnapshot(snapshot) {
         continue;
       }
       if (remote.html) remote.html = sanitizeNoteHtml(remote.html);
+      const local = localIndex !== -1 ? notes[localIndex] : null;
+      // A real conflict — not just "the remote is newer" (that's the normal
+      // case and needs no prompt) — is when THIS device also changed the
+      // note since the last time it successfully synced, and the two
+      // versions actually differ in content. Silently taking whichever
+      // arrived with the later timestamp would drop one edit for good.
+      const hasUnsyncedLocalChanges = local && local.lastSyncedAt && local.updatedAt > local.lastSyncedAt;
+      const contentDiffers = local && (remote.html !== local.html || remote.title !== local.title);
+      if (hasUnsyncedLocalChanges && contentDiffers) {
+        queueSyncConflict(local, remote);
+        applyingRemoteChangeIds.delete(encryptedRemote.id);
+        continue;
+      }
+      remote.lastSyncedAt = remote.updatedAt;
       if (localIndex === -1) notes.unshift(remote);
       else notes[localIndex] = remote;
       await dbPut(remote);
@@ -6274,6 +6289,132 @@ async function handleRemoteSnapshot(snapshot) {
   }
   if (listScreen.classList.contains("active")) renderList();
   setSyncStatus("🟢 Synchronisation active (chiffrée de bout en bout)");
+}
+
+// --- Visual conflict resolution: instead of last-write-wins silently
+// dropping whichever edit lost the timestamp race, a genuine divergence
+// (this device changed the note since its last sync, AND the incoming
+// remote version has different content) is queued and surfaced with a diff,
+// same word-level algorithm as the version history panel. ---
+let pendingConflicts = [];
+const conflictBtn = document.getElementById("conflict-btn");
+const conflictPanel = document.getElementById("conflict-panel");
+const conflictListEl = document.getElementById("conflict-list");
+conflictBtn.addEventListener("click", () => {
+  showList();
+  const opening = conflictPanel.classList.contains("hidden");
+  conflictPanel.classList.toggle("hidden");
+  if (opening) renderConflictPanel();
+});
+
+function queueSyncConflict(local, remote) {
+  if (pendingConflicts.some((c) => c.remote.id === remote.id)) return;
+  pendingConflicts.push({ local: { ...local }, remote });
+  updateConflictBadge();
+  showToast(`Conflit détecté sur « ${local.title || "Sans titre"} » — modifiée sur deux appareils à la fois`, () => conflictBtn.click(), {
+    actionLabel: "Résoudre",
+    ctrlZ: false,
+  });
+}
+
+function updateConflictBadge() {
+  conflictBtn.classList.toggle("hidden", pendingConflicts.length === 0);
+  conflictBtn.textContent = `⚠ Conflits (${pendingConflicts.length})`;
+}
+
+async function resolveConflict(index, resolution) {
+  const conflict = pendingConflicts[index];
+  if (!conflict) return;
+  const { local, remote } = conflict;
+  if (resolution === "local") {
+    // Re-push the local version with a fresher timestamp so it wins on the
+    // next round-trip instead of the remote version silently reappearing.
+    local.updatedAt = Date.now();
+    local.lastSyncedAt = local.updatedAt;
+    const idx = notes.findIndex((n) => n.id === local.id);
+    if (idx !== -1) notes[idx] = local;
+    await persistNote(local);
+  } else if (resolution === "remote") {
+    remote.lastSyncedAt = remote.updatedAt;
+    const idx = notes.findIndex((n) => n.id === remote.id);
+    if (idx !== -1) notes[idx] = remote;
+    else notes.unshift(remote);
+    await dbPut(remote);
+  } else if (resolution === "both") {
+    remote.lastSyncedAt = remote.updatedAt;
+    const idx = notes.findIndex((n) => n.id === remote.id);
+    if (idx !== -1) notes[idx] = remote;
+    else notes.unshift(remote);
+    await dbPut(remote);
+    const duplicate = { ...local, id: crypto.randomUUID(), title: `${local.title || "Sans titre"} (version en conflit)`, updatedAt: Date.now() };
+    duplicate.lastSyncedAt = null;
+    notes.unshift(duplicate);
+    await persistNote(duplicate);
+  }
+  pendingConflicts.splice(index, 1);
+  updateConflictBadge();
+  renderConflictPanel();
+  renderList();
+  if (currentNote && (currentNote.id === local.id || currentNote.id === remote.id) && editorScreen.classList.contains("active")) {
+    const stillThere = notes.find((n) => n.id === currentNote.id);
+    if (stillThere) {
+      currentNote = stillThere;
+      loadNoteIntoEditor();
+    }
+  }
+}
+
+function renderConflictPanel() {
+  conflictListEl.innerHTML = "";
+  if (!pendingConflicts.length) {
+    conflictListEl.innerHTML = '<li class="history-empty">Aucun conflit en attente.</li>';
+    return;
+  }
+  pendingConflicts.forEach((conflict, index) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const title = document.createElement("p");
+    title.style.fontWeight = "700";
+    title.textContent = conflict.local.title || conflict.remote.title || "Sans titre";
+    const diffBox = document.createElement("div");
+    diffBox.className = "history-diff";
+    const parts = diffWords(stripHtml(conflict.local.html), stripHtml(conflict.remote.html));
+    if (parts) {
+      parts.forEach((p) => {
+        if (p.type === "same") diffBox.appendChild(document.createTextNode(p.text));
+        else {
+          const mark = document.createElement(p.type === "del" ? "del" : "ins");
+          mark.textContent = p.text;
+          mark.title = p.type === "del" ? "Seulement dans la version d'ici" : "Seulement dans la version distante";
+          diffBox.appendChild(mark);
+        }
+      });
+    } else {
+      diffBox.textContent = "Notes trop volumineuses pour un aperçu détaillé.";
+    }
+    const actions = document.createElement("div");
+    actions.className = "sync-actions";
+    const keepLocal = document.createElement("button");
+    keepLocal.type = "button";
+    keepLocal.textContent = "Garder la mienne";
+    keepLocal.addEventListener("click", () => resolveConflict(index, "local"));
+    const keepRemote = document.createElement("button");
+    keepRemote.type = "button";
+    keepRemote.textContent = "Garder celle de l'autre appareil";
+    keepRemote.addEventListener("click", () => resolveConflict(index, "remote"));
+    const keepBoth = document.createElement("button");
+    keepBoth.type = "button";
+    keepBoth.className = "link-btn";
+    keepBoth.textContent = "Garder les deux";
+    keepBoth.addEventListener("click", () => resolveConflict(index, "both"));
+    actions.appendChild(keepLocal);
+    actions.appendChild(keepRemote);
+    actions.appendChild(keepBoth);
+    li.appendChild(title);
+    li.appendChild(diffBox);
+    li.appendChild(actions);
+    conflictListEl.appendChild(li);
+  });
 }
 
 async function persistNote(note) {
@@ -6296,6 +6437,11 @@ async function persistNote(note) {
       try {
         const payload = await encryptNoteForSync(note);
         await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), payload);
+        // Marks this exact version as the last one known to have reached
+        // the sync backend — the conflict check compares against this, not
+        // against updatedAt alone, to tell "genuinely diverged" apart from
+        // "just hasn't synced yet".
+        note.lastSyncedAt = note.updatedAt;
       } catch (err) {
         console.warn("sync push failed", err);
       }

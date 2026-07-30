@@ -75,6 +75,7 @@
       <div class="topbar-actions">
         <input id="import-input" type="file" accept="application/json,.json,.ics,.vcf,.noteflow,.md" class="hidden" />
         <button id="cmdk-btn" class="icon-btn cmdk-trigger" type="button" title="Palette de commandes (⌘K)">⌘K</button>
+        <button id="conflict-btn" class="icon-btn cmdk-trigger hidden" type="button" title="Conflits de synchronisation en attente"></button>
         <button id="theme-toggle" class="icon-btn" type="button" title="Thème"><svg class="icon"><use href="#icon-contrast"/></svg></button>
         <div class="menu-wrap">
           <button id="list-menu-btn" class="icon-btn" type="button" title="Plus d'options"><svg class="icon"><use href="#icon-more"/></svg></button>
@@ -143,6 +144,12 @@
         <button id="local-backup-now-btn" type="button" class="link-btn">Sauvegarder maintenant</button>
         <button id="local-backup-disable-btn" type="button" class="link-btn">Désactiver</button>
       </div>
+    </div>
+
+    <div id="conflict-panel" class="side-panel hidden">
+      <p class="sync-status">Conflits de synchronisation</p>
+      <p class="panel-hint">Ces notes ont été modifiées sur cet appareil et sur un autre en même temps, avant que la synchronisation n'ait eu lieu.</p>
+      <ul id="conflict-list" class="history-list"></ul>
     </div>
 
     <div id="webdav-panel" class="sync-panel hidden">
