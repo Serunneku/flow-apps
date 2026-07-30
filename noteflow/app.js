@@ -747,6 +747,12 @@ importInput.addEventListener("change", async () => {
       const packet = JSON.parse(await file.text());
       const count = await importEncryptedPacket(packet);
       if (count) showToast("Note déchiffrée et importée");
+    } else if (name.endsWith(".md")) {
+      const note = importMarkdown(await file.text());
+      notes.unshift(note);
+      await persistNote(note);
+      renderList();
+      showToast("Note importée depuis Markdown");
     } else {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -2091,6 +2097,196 @@ function safeFilename(name) {
   return name.replace(/[\\/:*?"<>|]+/g, "").trim();
 }
 
+// --- Markdown export/import: real portability out of the notebook, instead
+// of only a JSON format nothing else reads. Not full CommonMark — a
+// pragmatic subset (headings, bold/italic, lists, checklists, links, code
+// fences, blockquotes) that round-trips NoteFlow's own export cleanly and
+// reads plain external Markdown reasonably. ---
+function yamlEscape(value) {
+  return /[:#"'\n]/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+}
+
+function htmlToMarkdown(html) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const lines = [];
+
+  function inline(node) {
+    let out = "";
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === 3) {
+        out += child.textContent;
+      } else if (child.tagName === "B" || child.tagName === "STRONG") {
+        out += `**${inline(child)}**`;
+      } else if (child.tagName === "I" || child.tagName === "EM") {
+        out += `*${inline(child)}*`;
+      } else if (child.tagName === "S" || child.tagName === "STRIKE") {
+        out += `~~${inline(child)}~~`;
+      } else if (child.tagName === "A") {
+        out += `[${inline(child)}](${child.getAttribute("href") || ""})`;
+      } else if (child.tagName === "BR") {
+        out += "\n";
+      } else {
+        out += inline(child);
+      }
+    });
+    return out;
+  }
+
+  // childNodes, not children: the very first line of a fresh note can be a
+  // bare top-level text node (no <p> wrapper yet, before any block-level
+  // command runs) — .children alone silently drops it, same quirk the note
+  // splitter works around elsewhere in this file.
+  Array.from(container.childNodes).forEach((el) => {
+    if (el.nodeType === 3) {
+      const text = el.textContent.trim();
+      if (text) lines.push(text, "");
+      return;
+    }
+    if (/^H[1-3]$/.test(el.tagName)) {
+      lines.push(`${"#".repeat(Number(el.tagName[1]))} ${inline(el).trim()}`, "");
+    } else if (el.tagName === "BLOCKQUOTE") {
+      lines.push(`> ${inline(el).trim()}`, "");
+    } else if (el.tagName === "PRE") {
+      const code = el.querySelector("code");
+      lines.push("```", (code ? code.textContent : el.textContent).replace(/​/g, ""), "```", "");
+    } else if (el.tagName === "UL" && el.classList.contains("checklist")) {
+      Array.from(el.children).forEach((li) => {
+        const checked = li.querySelector("input[type=checkbox]")?.hasAttribute("checked");
+        const text = (li.querySelector("span")?.textContent || "").replace(/​/g, "").trim();
+        lines.push(`- [${checked ? "x" : " "}] ${text}`);
+      });
+      lines.push("");
+    } else if (el.tagName === "UL") {
+      Array.from(el.children).forEach((li) => lines.push(`- ${inline(li).trim()}`));
+      lines.push("");
+    } else if (el.tagName === "OL") {
+      Array.from(el.children).forEach((li, i) => lines.push(`${i + 1}. ${inline(li).trim()}`));
+      lines.push("");
+    } else if (el.tagName === "TABLE") {
+      const rows = Array.from(el.rows).map((r) => Array.from(r.cells).map((c) => inline(c).trim()));
+      if (rows.length) {
+        lines.push(`| ${rows[0].join(" | ")} |`);
+        lines.push(`| ${rows[0].map(() => "---").join(" | ")} |`);
+        rows.slice(1).forEach((r) => lines.push(`| ${r.join(" | ")} |`));
+        lines.push("");
+      }
+    } else if (el.classList.contains("note-callout")) {
+      lines.push(`> **${el.classList.contains("note-callout-warning") ? "⚠️" : "ℹ️"}** ${inline(el).trim()}`, "");
+    } else if (el.tagName === "DIV" && !el.classList.contains("transclusion")) {
+      lines.push(inline(el).trim(), "");
+    } else {
+      lines.push(inline(el).trim(), "");
+    }
+  });
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function markdownToHtml(md) {
+  const lines = md.split(/\r?\n/);
+  const html = [];
+  let i = 0;
+  function inline(text) {
+    return escapeHtml(text)
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/~~(.+?)~~/g, "<s>$1</s>")
+      .replace(/(?:^|[^*])\*([^*]+?)\*(?!\*)/g, (m, g1) => m[0] + `<i>${g1}</i>`)
+      .replace(/\[([^\]]*)\]\(([^)]*)\)/g, '<a href="$2">$1</a>');
+  }
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^```/.test(line)) {
+      const code = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
+      i++;
+      html.push(`<pre class="note-code"><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+    } else if (/^#{1,3}\s+/.test(line)) {
+      const level = line.match(/^#+/)[0].length;
+      html.push(`<h${level}>${inline(line.replace(/^#+\s+/, ""))}</h${level}>`);
+      i++;
+    } else if (/^>\s?/.test(line)) {
+      html.push(`<blockquote>${inline(line.replace(/^>\s?/, ""))}</blockquote>`);
+      i++;
+    } else if (/^-\s+\[[ xX]\]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^-\s+\[[ xX]\]\s+/.test(lines[i])) {
+        const checked = /\[[xX]\]/.test(lines[i]);
+        const text = lines[i].replace(/^-\s+\[[ xX]\]\s+/, "");
+        items.push(`<li class="checklist-item"><input type="checkbox"${checked ? ' checked=""' : ""}><span>${inline(text)}</span></li>`);
+        i++;
+      }
+      html.push(`<ul class="checklist">${items.join("")}</ul>`);
+    } else if (/^[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^[-*]\s+/, ""))}</li>`);
+        i++;
+      }
+      html.push(`<ul>${items.join("")}</ul>`);
+    } else if (/^\d+\.\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^\d+\.\s+/, ""))}</li>`);
+        i++;
+      }
+      html.push(`<ol>${items.join("")}</ol>`);
+    } else if (line.trim() === "") {
+      i++;
+    } else {
+      html.push(`<p>${inline(line)}</p>`);
+      i++;
+    }
+  }
+  return html.join("");
+}
+
+function parseFrontMatter(text) {
+  const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) return { meta: {}, body: text };
+  const meta = {};
+  match[1].split("\n").forEach((line) => {
+    const sep = line.indexOf(":");
+    if (sep === -1) return;
+    const key = line.slice(0, sep).trim();
+    let value = line.slice(sep + 1).trim();
+    if (/^\[.*\]$/.test(value)) {
+      meta[key] = value
+        .slice(1, -1)
+        .split(",")
+        .map((v) => v.trim().replace(/^"|"$/g, ""))
+        .filter(Boolean);
+    } else {
+      meta[key] = value.replace(/^"|"$/g, "");
+    }
+  });
+  return { meta, body: match[2] };
+}
+
+function exportNoteAsMarkdown(note) {
+  const front = [
+    "---",
+    `title: ${yamlEscape(note.title || "Sans titre")}`,
+    note.folder ? `folder: ${yamlEscape(note.folder)}` : null,
+    note.tags && note.tags.length ? `tags: [${note.tags.map(yamlEscape).join(", ")}]` : null,
+    `created: ${new Date(note.createdAt).toISOString()}`,
+    `updated: ${new Date(note.updatedAt).toISOString()}`,
+    "---",
+    "",
+  ].filter((l) => l !== null);
+  return front.join("\n") + htmlToMarkdown(note.html);
+}
+
+function importMarkdown(text) {
+  const { meta, body } = parseFrontMatter(text);
+  const note = newNoteObject();
+  note.title = meta.title || "Note importée";
+  note.folder = meta.folder || "";
+  note.tags = Array.isArray(meta.tags) ? meta.tags : meta.tags ? [meta.tags] : [];
+  note.html = sanitizeNoteHtml(markdownToHtml(body));
+  return note;
+}
+
 document.getElementById("export-note-btn").addEventListener("click", async () => {
   await flushSave(true);
   const exportNote = await noteForExport(currentNote);
@@ -2152,6 +2348,18 @@ document.getElementById("export-webpage-btn").addEventListener("click", async ()
   const blob = new Blob([html], { type: "text/html" });
   downloadBlob(blob, `${safeFilename(currentNote.title || "note") || "note"}.html`);
   showToast("Page web exportée");
+});
+
+document.getElementById("export-markdown-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour l'exporter");
+    return;
+  }
+  await flushSave(true);
+  const md = exportNoteAsMarkdown(currentNote);
+  const blob = new Blob([md], { type: "text/markdown" });
+  downloadBlob(blob, `${safeFilename(currentNote.title || "note") || "note"}.md`);
+  showToast("Note exportée en Markdown");
 });
 
 // A password-encrypted, self-contained .noteflow file — the honest
@@ -5905,6 +6113,7 @@ function cmdkActionItems(query) {
       { label: "Extraire les tâches", sub: "", action: () => document.getElementById("extract-tasks-btn").click() },
       { label: "Reporter les tâches non faites", sub: "", action: () => document.getElementById("carry-over-tasks-btn").click() },
       { label: "Exporter cette note", sub: "JSON", action: () => document.getElementById("export-note-btn").click() },
+      { label: "Exporter en Markdown", sub: "", action: () => document.getElementById("export-markdown-btn").click() },
       { label: "Mode dessin & surlignage", sub: "", action: () => modeDrawBtn.click() },
       { label: "Mode focus", sub: "", action: () => focusBtn.click() },
       { label: "Mode lecture", sub: "", action: () => readingModeBtn.click() },
