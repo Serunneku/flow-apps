@@ -4281,6 +4281,50 @@ textEditor.addEventListener("click", (e) => {
   if (notes.some((n) => n.id === id)) goToNote(id);
 });
 
+// --- Hover preview: see a linked note's content without leaving the one
+// you're reading, mouse only (a touch device has no hover state, so tapping
+// still just navigates via the click handler above). ---
+const wikilinkHoverPreviewEl = document.getElementById("wikilink-hover-preview");
+let wikilinkHoverTimer = null;
+let wikilinkHoverHideTimer = null;
+
+function showWikilinkHoverPreview(link) {
+  const id = link.dataset.noteId;
+  const note = notes.find((n) => n.id === id && !n.deletedAt);
+  if (!note) return;
+  wikilinkHoverPreviewEl.innerHTML = note.locked
+    ? '<p class="split-view-empty">Note verrouillée.</p>'
+    : `<p><strong>${escapeHtml(note.title || "Sans titre")}</strong></p>` + (sanitizeNoteHtml(note.html) || '<p class="split-view-empty">Note vide.</p>');
+  wikilinkHoverPreviewEl.classList.remove("hidden");
+  const linkRect = link.getBoundingClientRect();
+  const pageRect = notePage.getBoundingClientRect();
+  wikilinkHoverPreviewEl.style.left = `${linkRect.left - pageRect.left}px`;
+  wikilinkHoverPreviewEl.style.top = `${linkRect.bottom - pageRect.top + 6}px`;
+}
+
+function hideWikilinkHoverPreview() {
+  wikilinkHoverPreviewEl.classList.add("hidden");
+}
+
+textEditor.addEventListener("mouseover", (e) => {
+  const link = e.target.closest("a.wikilink");
+  if (!link) return;
+  clearTimeout(wikilinkHoverHideTimer);
+  clearTimeout(wikilinkHoverTimer);
+  wikilinkHoverTimer = setTimeout(() => showWikilinkHoverPreview(link), 350);
+});
+textEditor.addEventListener("mouseout", (e) => {
+  const link = e.target.closest("a.wikilink");
+  if (!link) return;
+  clearTimeout(wikilinkHoverTimer);
+  // A short delay before hiding: lets the pointer travel from the link down
+  // into the preview box itself (to scroll it, say) without it vanishing
+  // the instant the cursor leaves the link's own bounding box.
+  wikilinkHoverHideTimer = setTimeout(hideWikilinkHoverPreview, 250);
+});
+wikilinkHoverPreviewEl.addEventListener("mouseenter", () => clearTimeout(wikilinkHoverHideTimer));
+wikilinkHoverPreviewEl.addEventListener("mouseleave", hideWikilinkHoverPreview);
+
 // --- Transclusion: typing ![[Titre]] embeds a read-only, refreshed-on-open
 // snapshot of that note's content right here, instead of just linking to it. ---
 function renderTransclusionBlock(el, note) {
