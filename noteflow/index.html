@@ -176,6 +176,7 @@
             <button class="menu-item" id="ephemeral-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Note éphémère</button>
             <button class="menu-item" id="history-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Historique des versions</button>
             <button class="menu-item" id="backlinks-btn" type="button"><svg class="icon"><use href="#icon-link"/></svg>Notes liées</button>
+            <button class="menu-item" id="outline-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Sommaire</button>
             <button class="menu-item" id="lock-btn" type="button"><svg class="icon"><use href="#icon-lock-open"/></svg>Verrouiller</button>
             <button class="menu-item" id="biometric-setup-btn" type="button"><svg class="icon"><use href="#icon-lock-closed"/></svg>Activer Face ID / empreinte</button>
             <button class="menu-item" id="print-btn" type="button"><svg class="icon"><use href="#icon-print"/></svg>Imprimer / PDF</button>
@@ -228,6 +229,12 @@
       <p class="sync-status">Notes qui pointent ici</p>
       <ul id="backlinks-list" class="history-list"></ul>
       <p class="panel-hint">Tape <code>[[Titre de la note]]</code> dans le texte pour créer un lien vers une autre note.</p>
+    </div>
+
+    <div id="outline-panel" class="side-panel hidden">
+      <p class="sync-status">Sommaire</p>
+      <ul id="outline-list" class="history-list"></ul>
+      <p class="panel-hint">Clique un titre pour y aller, ou sur ▾ pour replier sa section.</p>
     </div>
 
     <div id="color-panel" class="side-panel hidden">

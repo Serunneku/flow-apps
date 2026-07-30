@@ -3103,9 +3103,81 @@ const backlinksListEl = document.getElementById("backlinks-list");
 backlinksBtn.addEventListener("click", () => {
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
+  outlinePanel.classList.add("hidden");
   const opening = backlinksPanel.classList.contains("hidden");
   backlinksPanel.classList.toggle("hidden");
   if (opening) renderBacklinks();
+});
+
+// --- Outline: a live table of contents from the note's own H1/H2/H3, click
+// to jump to a heading, ▾/▸ to fold/unfold everything until the next
+// heading of the same or higher level (a lightweight section collapse,
+// without needing to wrap the editor's content in section containers). ---
+const outlineBtn = document.getElementById("outline-btn");
+const outlinePanel = document.getElementById("outline-panel");
+const outlineListEl = document.getElementById("outline-list");
+
+function headingLevel(el) {
+  return el.tagName === "H1" ? 1 : el.tagName === "H2" ? 2 : 3;
+}
+
+function isHeadingCollapsed(heading) {
+  const next = heading.nextElementSibling;
+  return !!(next && next.classList.contains("outline-collapsed"));
+}
+
+function toggleHeadingCollapse(heading) {
+  const level = headingLevel(heading);
+  const collapsing = !isHeadingCollapsed(heading);
+  let el = heading.nextElementSibling;
+  while (el && !(/^H[1-3]$/.test(el.tagName) && headingLevel(el) <= level)) {
+    el.classList.toggle("outline-collapsed", collapsing);
+    el = el.nextElementSibling;
+  }
+}
+
+function renderOutline() {
+  const headings = Array.from(textEditor.querySelectorAll("h1, h2, h3"));
+  outlineListEl.innerHTML = "";
+  if (!headings.length) {
+    outlineListEl.innerHTML = '<li class="history-empty">Aucun titre (H1/H2/H3) dans cette note.</li>';
+    return;
+  }
+  headings.forEach((heading, i) => {
+    if (!heading.id) heading.id = `outline-heading-${i}-${Date.now()}`;
+    const level = headingLevel(heading);
+    const li = document.createElement("li");
+    li.className = "history-item outline-item";
+    li.style.marginLeft = `${(level - 1) * 14}px`;
+    const foldBtn = document.createElement("button");
+    foldBtn.type = "button";
+    foldBtn.className = "link-btn outline-fold-btn";
+    foldBtn.textContent = isHeadingCollapsed(heading) ? "▸" : "▾";
+    foldBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleHeadingCollapse(heading);
+      foldBtn.textContent = isHeadingCollapsed(heading) ? "▸" : "▾";
+      scheduleSave();
+    });
+    const label = document.createElement("span");
+    label.textContent = heading.textContent.trim() || "(sans titre)";
+    label.addEventListener("click", () => {
+      outlinePanel.classList.add("hidden");
+      heading.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    li.appendChild(foldBtn);
+    li.appendChild(label);
+    outlineListEl.appendChild(li);
+  });
+}
+
+outlineBtn.addEventListener("click", () => {
+  reminderPanel.classList.add("hidden");
+  historyPanel.classList.add("hidden");
+  backlinksPanel.classList.add("hidden");
+  const opening = outlinePanel.classList.contains("hidden");
+  outlinePanel.classList.toggle("hidden");
+  if (opening) renderOutline();
 });
 
 // The surrounding paragraph/line of a link, not the whole note body — a
@@ -5092,7 +5164,7 @@ document.addEventListener("keydown", (e) => {
       lockCancelBtn.click();
       return;
     }
-    [reminderPanel, historyPanel, backlinksPanel, ephemeralPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
+    [reminderPanel, historyPanel, backlinksPanel, outlinePanel, ephemeralPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
   }
 
   const mod = e.metaKey || e.ctrlKey;

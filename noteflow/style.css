@@ -741,6 +741,32 @@ button {
   font-weight: 500;
 }
 
+.outline-item {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.outline-fold-btn {
+  min-width: 22px;
+  text-align: center;
+}
+
+.outline-item span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.text-editor .outline-collapsed {
+  display: none;
+}
+
 .history-diff {
   font-size: 12.5px;
   line-height: 1.5;
