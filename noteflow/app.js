@@ -4485,6 +4485,160 @@ window.addEventListener("resize", () => {
   if (!graphViewOverlay.classList.contains("hidden")) resizeGraphCanvas();
 });
 
+// --- Automatic mindmap: a static, read-only tree built purely from a
+// note's own H1/H2/H3 headings (no manual layout, no dragging notes around
+// like the graph view — this one just answers "what's the outline of this
+// long note, at a glance"). ---
+const mindmapViewOverlay = document.getElementById("mindmap-view-overlay");
+const mindmapViewClose = document.getElementById("mindmap-view-close");
+const mindmapViewTitle = document.getElementById("mindmap-view-title");
+const mindmapViewBtn = document.getElementById("mindmap-view-btn");
+const mindmapCanvas = document.getElementById("mindmap-canvas");
+const mindmapCtx = mindmapCanvas.getContext("2d");
+let mindmapNodes = [];
+let mindmapEdges = [];
+let mindmapPan = { x: 0, y: 0 };
+let mindmapDraggingCanvas = false;
+let mindmapLastPointer = null;
+
+function parseHeadingsTree(html) {
+  const div = document.createElement("div");
+  div.innerHTML = html || "";
+  const root = { level: 0, text: "", children: [] };
+  const stack = [root];
+  Array.from(div.children).forEach((el) => {
+    const m = /^H([1-3])$/.exec(el.tagName);
+    if (!m) return;
+    const level = Number(m[1]);
+    const node = { level, text: el.textContent.trim() || "Sans titre", children: [] };
+    while (stack.length > 1 && stack[stack.length - 1].level >= level) stack.pop();
+    stack[stack.length - 1].children.push(node);
+    stack.push(node);
+  });
+  return root;
+}
+
+const MINDMAP_H_GAP = 190;
+const MINDMAP_V_GAP = 46;
+
+function layoutMindmapTree(root) {
+  let yCounter = 0;
+  const nodes = [];
+  const edges = [];
+  function visit(node, depth, parent) {
+    if (!node.children.length) {
+      node.y = yCounter++ * MINDMAP_V_GAP;
+    } else {
+      node.children.forEach((c) => visit(c, depth + 1, node));
+      const ys = node.children.map((c) => c.y);
+      node.y = (Math.min(...ys) + Math.max(...ys)) / 2;
+    }
+    node.x = depth * MINDMAP_H_GAP;
+    nodes.push(node);
+    if (parent) edges.push({ from: parent, to: node });
+  }
+  root.children.forEach((c) => visit(c, 0, null));
+  return { nodes, edges };
+}
+
+function drawMindmap() {
+  const dpr = window.devicePixelRatio || 1;
+  mindmapCtx.save();
+  mindmapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  mindmapCtx.clearRect(0, 0, mindmapCanvas.width / dpr, mindmapCanvas.height / dpr);
+  mindmapCtx.translate(mindmapPan.x, mindmapPan.y);
+  const rootStyle = getComputedStyle(document.documentElement);
+  const borderColor = rootStyle.getPropertyValue("--border").trim() || "rgba(0,0,0,0.1)";
+  const goldColor = rootStyle.getPropertyValue("--gold").trim() || "#c8963c";
+  const textColor = rootStyle.getPropertyValue("--text").trim() || "#111";
+
+  mindmapCtx.strokeStyle = borderColor;
+  mindmapCtx.lineWidth = 1.5;
+  mindmapEdges.forEach((e) => {
+    mindmapCtx.beginPath();
+    mindmapCtx.moveTo(e.from.x + 6, e.from.y);
+    const midX = (e.from.x + e.to.x) / 2;
+    mindmapCtx.bezierCurveTo(midX, e.from.y, midX, e.to.y, e.to.x - 6, e.to.y);
+    mindmapCtx.stroke();
+  });
+
+  mindmapNodes.forEach((n) => {
+    const r = n.level === 1 ? 6 : n.level === 2 ? 4.5 : 3.5;
+    mindmapCtx.beginPath();
+    mindmapCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    mindmapCtx.fillStyle = goldColor;
+    mindmapCtx.fill();
+    mindmapCtx.fillStyle = textColor;
+    mindmapCtx.font = n.level === 1 ? "bold 13px sans-serif" : "12px sans-serif";
+    mindmapCtx.fillText(n.text.slice(0, 30), n.x + r + 6, n.y + 4);
+  });
+  mindmapCtx.restore();
+}
+
+function resizeMindmapCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = mindmapCanvas.getBoundingClientRect();
+  mindmapCanvas.width = rect.width * dpr;
+  mindmapCanvas.height = rect.height * dpr;
+}
+
+mindmapCanvas.addEventListener("pointerdown", (e) => {
+  mindmapDraggingCanvas = true;
+  mindmapLastPointer = { x: e.clientX, y: e.clientY };
+  mindmapCanvas.setPointerCapture(e.pointerId);
+});
+mindmapCanvas.addEventListener("pointermove", (e) => {
+  if (!mindmapDraggingCanvas || !mindmapLastPointer) return;
+  mindmapPan.x += e.clientX - mindmapLastPointer.x;
+  mindmapPan.y += e.clientY - mindmapLastPointer.y;
+  mindmapLastPointer = { x: e.clientX, y: e.clientY };
+  drawMindmap();
+});
+mindmapCanvas.addEventListener("pointerup", () => {
+  mindmapDraggingCanvas = false;
+  mindmapLastPointer = null;
+});
+
+function openMindmapView() {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour voir sa carte mentale");
+    return;
+  }
+  const tree = parseHeadingsTree(currentNote.html);
+  if (!tree.children.length) {
+    showToast("Aucun titre (H1/H2/H3) dans cette note");
+    return;
+  }
+  const { nodes, edges } = layoutMindmapTree(tree);
+  mindmapNodes = nodes;
+  mindmapEdges = edges;
+  mindmapViewTitle.textContent = currentNote.title || "Sans titre";
+  mindmapViewOverlay.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    resizeMindmapCanvas();
+    const minY = Math.min(...nodes.map((n) => n.y));
+    const maxY = Math.max(...nodes.map((n) => n.y));
+    const rect = mindmapCanvas.getBoundingClientRect();
+    mindmapPan = { x: 30, y: rect.height / 2 - (minY + maxY) / 2 };
+    drawMindmap();
+  });
+}
+
+function closeMindmapView() {
+  mindmapViewOverlay.classList.add("hidden");
+}
+
+mindmapViewBtn.addEventListener("click", () => {
+  openMindmapView();
+});
+mindmapViewClose.addEventListener("click", closeMindmapView);
+window.addEventListener("resize", () => {
+  if (!mindmapViewOverlay.classList.contains("hidden")) {
+    resizeMindmapCanvas();
+    drawMindmap();
+  }
+});
+
 // --- Centralized tasks view: every checklist item across every note,
 // grouped by note, editable in place (toggling here writes straight back
 // into that note's stored html — no need to open the note itself). ---

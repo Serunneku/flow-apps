@@ -2567,7 +2567,8 @@ a:focus-visible,
   border-bottom: 1px solid var(--border);
 }
 
-#graph-canvas {
+#graph-canvas,
+#mindmap-canvas {
   flex: 1;
   width: 100%;
   cursor: grab;

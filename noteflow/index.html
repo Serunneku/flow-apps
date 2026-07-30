@@ -257,6 +257,7 @@
             <button class="menu-item" id="duplicate-note-btn" type="button"><svg class="icon"><use href="#icon-duplicate"/></svg>Dupliquer</button>
             <button class="menu-item" id="save-as-template-btn" type="button"><svg class="icon"><use href="#icon-duplicate"/></svg>Enregistrer comme modèle</button>
             <button class="menu-item" id="split-note-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Scinder par titres</button>
+            <button class="menu-item" id="mindmap-view-btn" type="button"><svg class="icon"><use href="#icon-link"/></svg>Carte mentale</button>
             <button class="menu-item" id="extract-tasks-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Extraire les tâches</button>
             <button class="menu-item" id="carry-over-tasks-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Reporter les tâches non faites</button>
             <button class="menu-item" id="share-note-btn" type="button"><svg class="icon"><use href="#icon-share"/></svg>Partager</button>
@@ -544,6 +545,14 @@
     </div>
     <canvas id="graph-canvas"></canvas>
     <div id="graph-tooltip" class="graph-tooltip hidden"></div>
+  </div>
+
+  <div id="mindmap-view-overlay" class="graph-view-overlay hidden" role="dialog" aria-modal="true" aria-label="Carte mentale de la note">
+    <div class="graph-view-header">
+      <span id="mindmap-view-title"></span>
+      <button type="button" id="mindmap-view-close" class="icon-btn" title="Fermer"><svg class="icon"><use href="#icon-close"/></svg></button>
+    </div>
+    <canvas id="mindmap-canvas"></canvas>
   </div>
 
   <div id="tasks-view-overlay" class="graph-view-overlay hidden" role="dialog" aria-modal="true" aria-label="Toutes les tâches">
