@@ -82,6 +82,7 @@
             <button class="menu-item" id="export-btn" type="button"><svg class="icon"><use href="#icon-download"/></svg>Exporter les notes</button>
             <button class="menu-item" id="import-btn" type="button"><svg class="icon"><use href="#icon-upload"/></svg>Importer des notes</button>
             <button class="menu-item" id="sync-toggle" type="button"><svg class="icon"><use href="#icon-cloud"/></svg>Synchronisation</button>
+            <button class="menu-item" id="local-backup-toggle" type="button"><svg class="icon"><use href="#icon-download"/></svg>Sauvegarde automatique locale</button>
             <div class="menu-sep"></div>
             <button class="menu-item" id="select-mode-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Sélection multiple</button>
             <button class="menu-item" id="manage-tags-btn" type="button"><svg class="icon"><use href="#icon-star"/></svg>Gérer les tags</button>
@@ -122,6 +123,16 @@
       <div class="sync-actions">
         <button id="sync-save-btn" type="button">Activer la synchronisation</button>
         <button id="sync-disable-btn" type="button" class="link-btn">Désactiver</button>
+      </div>
+    </div>
+
+    <div id="local-backup-panel" class="sync-panel hidden">
+      <p id="local-backup-status" class="sync-status">Sauvegarde automatique locale non configurée</p>
+      <p class="panel-hint">Choisis un dossier sur ton disque : NoteFlow y dépose un export horodaté du carnet, périodiquement pendant que l'app est ouverte, ou à la demande.</p>
+      <div class="sync-actions">
+        <button id="local-backup-choose-btn" type="button">Choisir un dossier</button>
+        <button id="local-backup-now-btn" type="button" class="link-btn">Sauvegarder maintenant</button>
+        <button id="local-backup-disable-btn" type="button" class="link-btn">Désactiver</button>
       </div>
     </div>
 

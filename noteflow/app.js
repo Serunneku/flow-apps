@@ -5028,6 +5028,133 @@ window.addEventListener("resize", () => {
   }
 });
 
+// --- Local automatic backup (File System Access API, Chromium desktop only)
+// A directory handle can be structured-cloned into IndexedDB and survives
+// across sessions (with the browser re-prompting for permission on first
+// use each session, per the API's security model) — kept in its own tiny
+// database rather than bumping the main notes DB's schema version. ---
+const BACKUP_DB_NAME = "noteflow-backup";
+const BACKUP_STORE = "handles";
+const BACKUP_KEY = "backupDir";
+let backupDbPromise = null;
+function openBackupDB() {
+  if (!backupDbPromise) {
+    backupDbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(BACKUP_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains(BACKUP_STORE)) req.result.createObjectStore(BACKUP_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return backupDbPromise;
+}
+async function saveBackupHandle(handle) {
+  const db = await openBackupDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BACKUP_STORE, "readwrite");
+    tx.objectStore(BACKUP_STORE).put(handle, BACKUP_KEY);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function loadBackupHandle() {
+  const db = await openBackupDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BACKUP_STORE, "readonly");
+    const req = tx.objectStore(BACKUP_STORE).get(BACKUP_KEY);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function clearBackupHandle() {
+  const db = await openBackupDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BACKUP_STORE, "readwrite");
+    tx.objectStore(BACKUP_STORE).delete(BACKUP_KEY);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+const localBackupToggle = document.getElementById("local-backup-toggle");
+const localBackupPanel = document.getElementById("local-backup-panel");
+const localBackupStatusEl = document.getElementById("local-backup-status");
+const localBackupChooseBtn = document.getElementById("local-backup-choose-btn");
+const localBackupNowBtn = document.getElementById("local-backup-now-btn");
+const localBackupDisableBtn = document.getElementById("local-backup-disable-btn");
+let backupDirHandle = null;
+
+function setLocalBackupStatus(text) {
+  localBackupStatusEl.textContent = text;
+}
+
+localBackupToggle.addEventListener("click", () => localBackupPanel.classList.toggle("hidden"));
+
+async function runLocalBackup(silent) {
+  if (!backupDirHandle) return;
+  try {
+    const perm = await backupDirHandle.requestPermission({ mode: "readwrite" });
+    if (perm !== "granted") {
+      setLocalBackupStatus("🔴 Permission refusée pour ce dossier");
+      return;
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const fileHandle = await backupDirHandle.getFileHandle(`noteflow-backup-${stamp}.json`, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(notes, null, 2));
+    await writable.close();
+    setLocalBackupStatus(`🟢 Dernière sauvegarde : ${new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}`);
+    if (!silent) showToast("Sauvegarde locale effectuée");
+  } catch (err) {
+    setLocalBackupStatus("🔴 Échec de la sauvegarde : " + err.message);
+  }
+}
+
+localBackupChooseBtn.addEventListener("click", async () => {
+  if (!window.showDirectoryPicker) {
+    showToast("Non disponible sur ce navigateur (Chrome/Edge sur ordinateur uniquement)");
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+    backupDirHandle = handle;
+    await saveBackupHandle(handle);
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    setLocalBackupStatus(`🟢 Dossier « ${handle.name} » configuré`);
+    await runLocalBackup(true);
+  } catch {
+    /* user cancelled the picker */
+  }
+});
+
+localBackupNowBtn.addEventListener("click", () => runLocalBackup(false));
+
+localBackupDisableBtn.addEventListener("click", async () => {
+  backupDirHandle = null;
+  await clearBackupHandle();
+  setLocalBackupStatus("Sauvegarde automatique locale non configurée");
+  showToast("Sauvegarde locale désactivée");
+});
+
+(async () => {
+  try {
+    const handle = await loadBackupHandle();
+    if (handle) {
+      backupDirHandle = handle;
+      setLocalBackupStatus(`🟡 Dossier « ${handle.name} » enregistré (autorisation à reconfirmer)`);
+    }
+  } catch {
+    /* no stored handle yet, or File System Access unsupported */
+  }
+})();
+
+// Every 30 minutes while the app stays open — there is no way to run this
+// while genuinely closed without a native background service, which would
+// mean a server component this app deliberately doesn't have.
+setInterval(() => runLocalBackup(true), 30 * 60 * 1000);
+
 // --- Cloud sync (Firebase, optional) ---
 const SYNC_KEYS = { config: "noteflow.sync.config", code: "noteflow.sync.code" };
 const syncToggle = document.getElementById("sync-toggle");
