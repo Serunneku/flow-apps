@@ -83,6 +83,7 @@
             <button class="menu-item" id="import-btn" type="button"><svg class="icon"><use href="#icon-upload"/></svg>Importer des notes</button>
             <button class="menu-item" id="sync-toggle" type="button"><svg class="icon"><use href="#icon-cloud"/></svg>Synchronisation</button>
             <button class="menu-item" id="local-backup-toggle" type="button"><svg class="icon"><use href="#icon-download"/></svg>Sauvegarde automatique locale</button>
+            <button class="menu-item" id="webdav-toggle" type="button"><svg class="icon"><use href="#icon-cloud"/></svg>Synchronisation WebDAV</button>
             <button class="menu-item" id="journal-today-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Note du jour</button>
             <button class="menu-item" id="journal-calendar-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Calendrier du journal</button>
             <div class="menu-sep"></div>
@@ -136,11 +137,30 @@
 
     <div id="local-backup-panel" class="sync-panel hidden">
       <p id="local-backup-status" class="sync-status">Sauvegarde automatique locale non configurée</p>
-      <p class="panel-hint">Choisis un dossier sur ton disque : NoteFlow y dépose un export horodaté du carnet, périodiquement pendant que l'app est ouverte, ou à la demande.</p>
+      <p class="panel-hint">Choisis un dossier sur ton disque (ou un dossier synchronisé par iCloud Drive / Google Drive / Dropbox) : NoteFlow y lit et y écrit un fichier de synchronisation à chaque sauvegarde, en plus d'un export horodaté. Choisis le même dossier synchronisé sur chaque appareil pour que les notes se retrouvent des deux côtés.</p>
       <div class="sync-actions">
         <button id="local-backup-choose-btn" type="button">Choisir un dossier</button>
         <button id="local-backup-now-btn" type="button" class="link-btn">Sauvegarder maintenant</button>
         <button id="local-backup-disable-btn" type="button" class="link-btn">Désactiver</button>
+      </div>
+    </div>
+
+    <div id="webdav-panel" class="sync-panel hidden">
+      <p id="webdav-status" class="sync-status">Synchronisation WebDAV non configurée</p>
+      <label class="sync-label">URL du fichier de synchronisation (Nextcloud, ownCloud, tout serveur WebDAV)
+        <input id="webdav-url-input" type="text" class="sync-code-input" placeholder="https://mon-nextcloud.example/remote.php/dav/files/moi/noteflow-sync.json" autocomplete="off" />
+      </label>
+      <label class="sync-label">Identifiant
+        <input id="webdav-user-input" type="text" class="sync-code-input" autocomplete="off" />
+      </label>
+      <label class="sync-label">Mot de passe (ou jeton d'application)
+        <input id="webdav-pass-input" type="password" class="sync-code-input" autocomplete="off" />
+      </label>
+      <p class="panel-hint">Nécessite que le serveur WebDAV autorise les requêtes cross-origin (CORS) depuis un navigateur — vérifie la configuration de ton serveur si la connexion échoue.</p>
+      <div class="sync-actions">
+        <button id="webdav-save-btn" type="button">Activer la synchronisation</button>
+        <button id="webdav-sync-now-btn" type="button" class="link-btn">Synchroniser maintenant</button>
+        <button id="webdav-disable-btn" type="button" class="link-btn">Désactiver</button>
       </div>
     </div>
 

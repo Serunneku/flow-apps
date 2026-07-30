@@ -5839,6 +5839,37 @@ function setLocalBackupStatus(text) {
 
 localBackupToggle.addEventListener("click", () => localBackupPanel.classList.toggle("hidden"));
 
+// Merges an array of notes (from a JSON.parse of some external source — a
+// sync file, a WebDAV snapshot) into the in-memory `notes`, same
+// last-write-wins-by-updatedAt rule as manual JSON import. Returns counts so
+// callers can report something meaningful instead of a generic "done".
+async function mergeExternalNotes(imported) {
+  let added = 0;
+  let updated = 0;
+  for (const note of imported) {
+    if (!note || !note.id) continue;
+    if (note.html) note.html = sanitizeNoteHtml(note.html);
+    const index = notes.findIndex((n) => n.id === note.id);
+    if (index === -1) {
+      notes.push(note);
+      added++;
+    } else if ((note.updatedAt || 0) > (notes[index].updatedAt || 0)) {
+      notes[index] = note;
+      updated++;
+    }
+    if (added || updated) await dbPut(note);
+  }
+  if (added || updated) renderList();
+  return { added, updated };
+}
+
+// The same folder written by another device (an iCloud Drive / Google Drive
+// desktop-synced folder, picked on both machines) turns this from a one-way
+// backup into real two-way sync: read whatever the other device last wrote
+// to the stable sync file, merge it in, then write the merged state back —
+// both a timestamped backup (history) and the live sync file (merge target).
+const LOCAL_SYNC_FILENAME = "noteflow-sync.json";
+
 async function runLocalBackup(silent) {
   if (!backupDirHandle) return;
   try {
@@ -5847,13 +5878,32 @@ async function runLocalBackup(silent) {
       setLocalBackupStatus("🔴 Permission refusée pour ce dossier");
       return;
     }
+    let mergeResult = { added: 0, updated: 0 };
+    try {
+      const existingHandle = await backupDirHandle.getFileHandle(LOCAL_SYNC_FILENAME);
+      const file = await existingHandle.getFile();
+      const imported = JSON.parse(await file.text());
+      if (Array.isArray(imported)) mergeResult = await mergeExternalNotes(imported);
+    } catch {
+      /* no sync file yet on this folder, or it couldn't be read — fine, this write creates it */
+    }
+
+    const syncHandle = await backupDirHandle.getFileHandle(LOCAL_SYNC_FILENAME, { create: true });
+    const syncWritable = await syncHandle.createWritable();
+    await syncWritable.write(JSON.stringify(notes, null, 2));
+    await syncWritable.close();
+
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const fileHandle = await backupDirHandle.getFileHandle(`noteflow-backup-${stamp}.json`, { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(JSON.stringify(notes, null, 2));
     await writable.close();
-    setLocalBackupStatus(`🟢 Dernière sauvegarde : ${new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}`);
-    if (!silent) showToast("Sauvegarde locale effectuée");
+
+    setLocalBackupStatus(`🟢 Synchronisé : ${new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}`);
+    if (!silent) {
+      const mergeText = mergeResult.added || mergeResult.updated ? ` (${mergeResult.added} ajoutée(s), ${mergeResult.updated} mise(s) à jour depuis le dossier)` : "";
+      showToast("Sauvegarde et synchronisation locale effectuées" + mergeText);
+    }
   } catch (err) {
     setLocalBackupStatus("🔴 Échec de la sauvegarde : " + err.message);
   }
@@ -5901,6 +5951,103 @@ localBackupDisableBtn.addEventListener("click", async () => {
 // while genuinely closed without a native background service, which would
 // mean a server component this app deliberately doesn't have.
 setInterval(() => runLocalBackup(true), 30 * 60 * 1000);
+
+// --- WebDAV sync: an alternative to configuring a Firebase project, for
+// anyone who already has a WebDAV server (Nextcloud, ownCloud, most self-
+// hosted or classic cloud-storage setups expose one). A single JSON
+// snapshot file, fetched with GET/merged locally/pushed back with PUT —
+// simpler than Firebase's per-note documents + live listener, since plain
+// HTTP has no equivalent of Firestore's realtime subscription. ---
+const WEBDAV_KEYS = { url: "noteflow.webdav.url", user: "noteflow.webdav.user" };
+const webdavToggle = document.getElementById("webdav-toggle");
+const webdavPanel = document.getElementById("webdav-panel");
+const webdavStatusEl = document.getElementById("webdav-status");
+const webdavUrlInput = document.getElementById("webdav-url-input");
+const webdavUserInput = document.getElementById("webdav-user-input");
+const webdavPassInput = document.getElementById("webdav-pass-input");
+const webdavSaveBtn = document.getElementById("webdav-save-btn");
+const webdavSyncNowBtn = document.getElementById("webdav-sync-now-btn");
+const webdavDisableBtn = document.getElementById("webdav-disable-btn");
+
+let webdavConfig = null; // { url, user, pass } — pass kept in memory only, never persisted
+let webdavInterval = null;
+
+function setWebdavStatus(text) {
+  webdavStatusEl.textContent = text;
+}
+
+webdavToggle.addEventListener("click", () => webdavPanel.classList.toggle("hidden"));
+
+async function runWebdavSync(silent) {
+  if (!webdavConfig) return;
+  try {
+    setWebdavStatus("Synchronisation…");
+    const authHeader = "Basic " + btoa(`${webdavConfig.user}:${webdavConfig.pass}`);
+    let mergeResult = { added: 0, updated: 0 };
+    const getResp = await fetch(webdavConfig.url, { method: "GET", headers: { Authorization: authHeader } });
+    if (getResp.ok) {
+      const remoteNotes = await getResp.json();
+      if (Array.isArray(remoteNotes)) mergeResult = await mergeExternalNotes(remoteNotes);
+    } else if (getResp.status !== 404) {
+      throw new Error(`GET ${getResp.status}`);
+    }
+    const putResp = await fetch(webdavConfig.url, {
+      method: "PUT",
+      headers: { Authorization: authHeader, "Content-Type": "application/json" },
+      body: JSON.stringify(notes),
+    });
+    if (!putResp.ok) throw new Error(`PUT ${putResp.status}`);
+    setWebdavStatus(`🟢 Synchronisé : ${new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}`);
+    if (!silent) {
+      const mergeText = mergeResult.added || mergeResult.updated ? ` (${mergeResult.added} ajoutée(s), ${mergeResult.updated} mise(s) à jour)` : "";
+      showToast("Synchronisation WebDAV effectuée" + mergeText);
+    }
+  } catch (err) {
+    setWebdavStatus("🔴 Échec de la synchronisation : " + err.message + " (vérifie l'URL, les identifiants, et que le serveur autorise CORS)");
+  }
+}
+
+webdavSaveBtn.addEventListener("click", async () => {
+  const url = webdavUrlInput.value.trim();
+  const user = webdavUserInput.value.trim();
+  const pass = webdavPassInput.value;
+  if (!url || !user || !pass) {
+    setWebdavStatus("🔴 URL, identifiant et mot de passe sont requis");
+    return;
+  }
+  webdavConfig = { url, user, pass };
+  savePref(WEBDAV_KEYS.url, url);
+  savePref(WEBDAV_KEYS.user, user);
+  webdavPassInput.value = "";
+  if (webdavInterval) clearInterval(webdavInterval);
+  webdavInterval = setInterval(() => runWebdavSync(true), 5 * 60 * 1000);
+  await runWebdavSync(false);
+});
+
+webdavSyncNowBtn.addEventListener("click", () => runWebdavSync(false));
+
+webdavDisableBtn.addEventListener("click", () => {
+  localStorage.removeItem(WEBDAV_KEYS.url);
+  localStorage.removeItem(WEBDAV_KEYS.user);
+  webdavConfig = null;
+  if (webdavInterval) {
+    clearInterval(webdavInterval);
+    webdavInterval = null;
+  }
+  setWebdavStatus("Synchronisation WebDAV non configurée");
+  showToast("Synchronisation WebDAV désactivée");
+});
+
+(() => {
+  const url = loadPref(WEBDAV_KEYS.url, null);
+  const user = loadPref(WEBDAV_KEYS.user, null);
+  if (url && user) {
+    webdavUrlInput.value = url;
+    webdavUserInput.value = user;
+    webdavPanel.classList.remove("hidden");
+    setWebdavStatus("🟡 Synchronisation WebDAV configurée : entre le mot de passe et clique « Activer » pour reprendre");
+  }
+})();
 
 // --- Journal: a dated note per day, in a "Journal" folder, matched by
 // journalDate (not by title, so renaming a day's entry doesn't orphan it)
