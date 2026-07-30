@@ -93,6 +93,7 @@
             <button class="menu-item" id="manage-snippets-btn" type="button"><svg class="icon"><use href="#icon-pencil"/></svg>Abréviations</button>
             <button class="menu-item" id="hygiene-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Hygiène du carnet</button>
             <button class="menu-item" id="shortcuts-btn" type="button"><svg class="icon"><use href="#icon-pencil"/></svg>Raccourcis clavier</button>
+            <button class="menu-item" id="replay-onboarding-btn" type="button"><svg class="icon"><use href="#icon-star"/></svg>Revoir le tutoriel</button>
             <button class="menu-item" id="sound-toggle-btn" type="button"><svg class="icon"><use href="#icon-sound"/></svg>Sons</button>
             <button class="menu-item" id="contrast-toggle-btn" type="button"><svg class="icon"><use href="#icon-contrast"/></svg>Contraste renforcé</button>
             <div class="menu-sep"></div>
@@ -503,6 +504,19 @@
         <button type="button" id="journal-cal-next" class="icon-btn" title="Mois suivant">›</button>
       </div>
       <div id="journal-cal-grid" class="journal-calendar-grid"></div>
+    </div>
+  </div>
+
+  <div id="onboarding-overlay" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Prise en main de NoteFlow">
+    <div class="cmdk-box onboarding-box">
+      <div id="onboarding-step" class="onboarding-step"></div>
+      <div class="onboarding-footer">
+        <div id="onboarding-dots" class="onboarding-dots"></div>
+        <div class="onboarding-actions">
+          <button type="button" id="onboarding-skip-btn" class="link-btn">Passer</button>
+          <button type="button" id="onboarding-next-btn">Suivant</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>

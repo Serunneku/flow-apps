@@ -7024,6 +7024,75 @@ async function handleIncomingShare() {
   showToast("Contenu partagé ajouté à une nouvelle note");
 }
 
+// --- Onboarding: a 3-step interactive tutorial shown once, on first launch
+// (no notes yet and the flag never set) — [[wikilinks]], ⌘K, and a closing
+// pointer to the rest of the app (shortcuts, ⋯ menus). Replayable anytime
+// from the list menu. ---
+const ONBOARDING_DONE_KEY = "noteflow.onboarding.done";
+const onboardingOverlay = document.getElementById("onboarding-overlay");
+const onboardingStepEl = document.getElementById("onboarding-step");
+const onboardingDotsEl = document.getElementById("onboarding-dots");
+const onboardingNextBtn = document.getElementById("onboarding-next-btn");
+const onboardingSkipBtn = document.getElementById("onboarding-skip-btn");
+let onboardingStepIndex = 0;
+
+const ONBOARDING_STEPS = [
+  {
+    title: "Bienvenue dans NoteFlow",
+    body: "Un carnet de notes local, rapide, et privé. Ce tour rapide te montre deux réflexes qui changent tout : les liens entre notes, et la palette de commandes.",
+  },
+  {
+    title: "Relie tes notes avec [[ ]]",
+    body: 'Dans le texte, tape <code>[[</code> puis le début du titre d\'une autre note : un menu apparaît pour la choisir (ou en créer une nouvelle à la volée). Le lien devient cliquable, et le panneau "Notes liées" montre les allers-retours dans les deux sens.',
+  },
+  {
+    title: "Va n'importe où avec ⌘K",
+    body: "Appuie sur <kbd class=\"shortcut-key\">Ctrl/⌘+K</kbd> à tout moment pour ouvrir une note par son titre ou son contenu, ou lancer une action (nouvelle note, thème, archives…) sans lâcher le clavier. Essaie <kbd class=\"shortcut-key\">&gt;</kbd>, <kbd class=\"shortcut-key\">#</kbd> ou <kbd class=\"shortcut-key\">/</kbd> en début de recherche pour filtrer par actions, tags ou dossiers.",
+  },
+  {
+    title: "C'est parti",
+    body: 'Le reste s\'explore au fil de l\'écriture : le menu "⋯" de chaque note cache verrouillage, historique, export, mode focus… et tu peux revoir ce tutoriel depuis le menu de la liste.',
+  },
+];
+
+function renderOnboardingStep() {
+  const step = ONBOARDING_STEPS[onboardingStepIndex];
+  onboardingStepEl.innerHTML = `<h2>${escapeHtml(step.title)}</h2><p>${step.body}</p>`;
+  onboardingDotsEl.innerHTML = "";
+  ONBOARDING_STEPS.forEach((_, i) => {
+    const dot = document.createElement("span");
+    dot.className = "onboarding-dot" + (i === onboardingStepIndex ? " active" : "");
+    onboardingDotsEl.appendChild(dot);
+  });
+  const isLast = onboardingStepIndex === ONBOARDING_STEPS.length - 1;
+  onboardingNextBtn.textContent = isLast ? "Commencer" : "Suivant";
+}
+
+function openOnboarding() {
+  onboardingStepIndex = 0;
+  onboardingOverlay.classList.remove("hidden");
+  renderOnboardingStep();
+}
+
+function closeOnboarding() {
+  onboardingOverlay.classList.add("hidden");
+  savePref(ONBOARDING_DONE_KEY, true);
+}
+
+onboardingNextBtn.addEventListener("click", () => {
+  if (onboardingStepIndex < ONBOARDING_STEPS.length - 1) {
+    onboardingStepIndex++;
+    renderOnboardingStep();
+  } else {
+    closeOnboarding();
+  }
+});
+onboardingSkipBtn.addEventListener("click", closeOnboarding);
+document.getElementById("replay-onboarding-btn").addEventListener("click", () => {
+  showList();
+  openOnboarding();
+});
+
 // --- Init ---
 (async () => {
   try {
@@ -7038,6 +7107,7 @@ async function handleIncomingShare() {
   await handleIncomingShare();
   summarizeMissedReminders();
   initSyncFromStorage();
+  if (!loadPref(ONBOARDING_DONE_KEY, false)) openOnboarding();
 })();
 
 // --- PWA service worker ---
