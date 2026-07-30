@@ -1730,6 +1730,7 @@ function parseTags(raw) {
 }
 
 function loadNoteIntoEditor() {
+  lastEditorActivityAt = Date.now();
   titleInput.value = currentNote.title || "";
   folderInput.value = currentNote.folder || "";
   tagsInput.value = (currentNote.tags || []).join(", ");
@@ -2315,6 +2316,34 @@ function flushOnLeave() {
 }
 document.addEventListener("visibilitychange", flushOnLeave);
 window.addEventListener("pagehide", flushOnLeave);
+
+// --- Auto-relock: a locked note left open and unattended stayed decrypted
+// in memory indefinitely — until the user manually navigated back to the
+// list — even if the tab sat in the background or idle for hours. Backing
+// the app or a couple of minutes without typing now re-locks it. ---
+const AUTO_RELOCK_IDLE_MS = 2 * 60 * 1000;
+let lastEditorActivityAt = Date.now();
+["input", "keydown", "mousedown", "touchstart"].forEach((evt) => {
+  textEditor.addEventListener(evt, () => {
+    lastEditorActivityAt = Date.now();
+  });
+});
+
+async function relockIfUnattended() {
+  if (!currentNote || !currentNote.locked || !activeUnlockKey || activeUnlockKey.noteId !== currentNote.id) return;
+  if (!editorScreen.classList.contains("active")) return;
+  await flushSave(true);
+  showList();
+  showToast("Note reverrouillée automatiquement");
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") relockIfUnattended();
+});
+
+setInterval(() => {
+  if (Date.now() - lastEditorActivityAt > AUTO_RELOCK_IDLE_MS) relockIfUnattended();
+}, 30000);
 
 titleInput.addEventListener("input", scheduleSave);
 folderInput.addEventListener("change", scheduleSave);
