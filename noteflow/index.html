@@ -94,6 +94,7 @@
             <button class="menu-item" id="hygiene-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Hygiène du carnet</button>
             <button class="menu-item" id="shortcuts-btn" type="button"><svg class="icon"><use href="#icon-pencil"/></svg>Raccourcis clavier</button>
             <button class="menu-item" id="replay-onboarding-btn" type="button"><svg class="icon"><use href="#icon-star"/></svg>Revoir le tutoriel</button>
+            <button class="menu-item" id="graph-view-btn" type="button"><svg class="icon"><use href="#icon-link"/></svg>Vue graphe</button>
             <button class="menu-item" id="sound-toggle-btn" type="button"><svg class="icon"><use href="#icon-sound"/></svg>Sons</button>
             <button class="menu-item" id="contrast-toggle-btn" type="button"><svg class="icon"><use href="#icon-contrast"/></svg>Contraste renforcé</button>
             <div class="menu-sep"></div>
@@ -505,6 +506,15 @@
       </div>
       <div id="journal-cal-grid" class="journal-calendar-grid"></div>
     </div>
+  </div>
+
+  <div id="graph-view-overlay" class="graph-view-overlay hidden" role="dialog" aria-modal="true" aria-label="Vue graphe des notes">
+    <div class="graph-view-header">
+      <span id="graph-view-count"></span>
+      <button type="button" id="graph-view-close" class="icon-btn" title="Fermer"><svg class="icon"><use href="#icon-close"/></svg></button>
+    </div>
+    <canvas id="graph-canvas"></canvas>
+    <div id="graph-tooltip" class="graph-tooltip hidden"></div>
   </div>
 
   <div id="onboarding-overlay" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Prise en main de NoteFlow">

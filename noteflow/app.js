@@ -3928,6 +3928,261 @@ function extractOutgoingRefs(html) {
   return refs;
 }
 
+// --- Interactive graph view: notes as nodes, wikilinks/transclusions as
+// edges, laid out with a small hand-rolled force simulation (repulsion +
+// spring attraction + centering, run on canvas via requestAnimationFrame) —
+// no charting library, since the actual algorithm is short and this avoids
+// a CDN dependency for something this self-contained. ---
+const graphViewBtn = document.getElementById("graph-view-btn");
+const graphViewOverlay = document.getElementById("graph-view-overlay");
+const graphViewClose = document.getElementById("graph-view-close");
+const graphViewCount = document.getElementById("graph-view-count");
+const graphCanvas = document.getElementById("graph-canvas");
+const graphCtx = graphCanvas.getContext("2d");
+const graphTooltip = document.getElementById("graph-tooltip");
+
+let graphNodes = [];
+let graphEdges = [];
+let graphAnimFrame = null;
+let graphDragNode = null;
+let graphPan = { x: 0, y: 0 };
+let graphDraggingCanvas = false;
+let graphLastPointer = null;
+let graphHoverNode = null;
+
+function buildGraphData() {
+  const active = notes.filter((n) => !n.deletedAt && !n.locked);
+  const idSet = new Set(active.map((n) => n.id));
+  const degree = new Map();
+  const edges = [];
+  active.forEach((note) => {
+    extractOutgoingRefs(note.html).forEach((ref) => {
+      if (!idSet.has(ref.id) || ref.id === note.id) return;
+      edges.push({ from: note.id, to: ref.id });
+      degree.set(note.id, (degree.get(note.id) || 0) + 1);
+      degree.set(ref.id, (degree.get(ref.id) || 0) + 1);
+    });
+  });
+  const cx = graphCanvas.width / 2;
+  const cy = graphCanvas.height / 2;
+  const nodes = active.map((n, i) => {
+    const angle = (i / active.length) * Math.PI * 2;
+    const radius = 80 + Math.random() * 60;
+    return {
+      id: n.id,
+      title: n.title || "Sans titre",
+      x: cx + Math.cos(angle) * radius,
+      y: cy + Math.sin(angle) * radius,
+      vx: 0,
+      vy: 0,
+      degree: degree.get(n.id) || 0,
+    };
+  });
+  return { nodes, edges };
+}
+
+function graphStep() {
+  const nodes = graphNodes;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const cx = graphCanvas.width / 2;
+  const cy = graphCanvas.height / 2;
+  // Repulsion between every pair — O(n²), fine for the hundreds-of-notes
+  // scale a personal notebook actually reaches.
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i];
+      const b = nodes[j];
+      let dx = a.x - b.x;
+      let dy = a.y - b.y;
+      let distSq = dx * dx + dy * dy || 0.01;
+      const force = 2400 / distSq;
+      const dist = Math.sqrt(distSq);
+      dx /= dist;
+      dy /= dist;
+      a.vx += dx * force;
+      a.vy += dy * force;
+      b.vx -= dx * force;
+      b.vy -= dy * force;
+    }
+  }
+  // Spring attraction along edges.
+  graphEdges.forEach((e) => {
+    const a = byId.get(e.from);
+    const b = byId.get(e.to);
+    if (!a || !b) return;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    const targetDist = 140;
+    const force = (dist - targetDist) * 0.02;
+    const fx = (dx / dist) * force;
+    const fy = (dy / dist) * force;
+    a.vx += fx;
+    a.vy += fy;
+    b.vx -= fx;
+    b.vy -= fy;
+  });
+  // Gentle centering so the whole graph doesn't drift off-canvas.
+  nodes.forEach((n) => {
+    if (n === graphDragNode) return;
+    n.vx += (cx - n.x) * 0.0015;
+    n.vy += (cy - n.y) * 0.0015;
+    n.vx *= 0.82;
+    n.vy *= 0.82;
+    n.x += n.vx;
+    n.y += n.vy;
+  });
+}
+
+function drawGraph() {
+  const dpr = window.devicePixelRatio || 1;
+  graphCtx.save();
+  graphCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  graphCtx.clearRect(0, 0, graphCanvas.width / dpr, graphCanvas.height / dpr);
+  graphCtx.translate(graphPan.x, graphPan.y);
+  const byId = new Map(graphNodes.map((n) => [n.id, n]));
+  const rootStyle = getComputedStyle(document.documentElement);
+  const borderColor = rootStyle.getPropertyValue("--border").trim() || "rgba(0,0,0,0.1)";
+  const goldColor = rootStyle.getPropertyValue("--gold").trim() || "#c8963c";
+  const textColor = rootStyle.getPropertyValue("--text").trim() || "#111";
+
+  graphCtx.strokeStyle = borderColor;
+  graphCtx.lineWidth = 1;
+  graphEdges.forEach((e) => {
+    const a = byId.get(e.from);
+    const b = byId.get(e.to);
+    if (!a || !b) return;
+    graphCtx.beginPath();
+    graphCtx.moveTo(a.x, a.y);
+    graphCtx.lineTo(b.x, b.y);
+    graphCtx.stroke();
+  });
+
+  graphNodes.forEach((n) => {
+    const r = 5 + Math.min(n.degree, 8) * 1.5;
+    graphCtx.beginPath();
+    graphCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    graphCtx.fillStyle = goldColor;
+    graphCtx.globalAlpha = n === graphHoverNode ? 1 : 0.7;
+    graphCtx.fill();
+    graphCtx.globalAlpha = 1;
+    graphCtx.fillStyle = textColor;
+    graphCtx.font = "11px sans-serif";
+    graphCtx.fillText(n.title.slice(0, 24), n.x + r + 4, n.y + 4);
+  });
+  graphCtx.restore();
+}
+
+function graphLoop() {
+  graphStep();
+  drawGraph();
+  graphAnimFrame = requestAnimationFrame(graphLoop);
+}
+
+function resizeGraphCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = graphCanvas.getBoundingClientRect();
+  graphCanvas.width = rect.width * dpr;
+  graphCanvas.height = rect.height * dpr;
+}
+
+function graphPointFromEvent(e) {
+  const rect = graphCanvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left - graphPan.x, y: e.clientY - rect.top - graphPan.y };
+}
+
+function findGraphNodeAt(pt) {
+  return graphNodes.find((n) => {
+    const r = 5 + Math.min(n.degree, 8) * 1.5 + 4;
+    return (n.x - pt.x) ** 2 + (n.y - pt.y) ** 2 <= r * r;
+  });
+}
+
+graphCanvas.addEventListener("pointerdown", (e) => {
+  const pt = graphPointFromEvent(e);
+  const node = findGraphNodeAt(pt);
+  if (node) {
+    graphDragNode = node;
+    graphCanvas.setPointerCapture(e.pointerId);
+  } else {
+    graphDraggingCanvas = true;
+    graphLastPointer = { x: e.clientX, y: e.clientY };
+  }
+});
+graphCanvas.addEventListener("pointermove", (e) => {
+  if (graphDragNode) {
+    const pt = graphPointFromEvent(e);
+    graphDragNode.x = pt.x;
+    graphDragNode.y = pt.y;
+    graphDragNode.vx = 0;
+    graphDragNode.vy = 0;
+  } else if (graphDraggingCanvas && graphLastPointer) {
+    graphPan.x += e.clientX - graphLastPointer.x;
+    graphPan.y += e.clientY - graphLastPointer.y;
+    graphLastPointer = { x: e.clientX, y: e.clientY };
+  } else {
+    const pt = graphPointFromEvent(e);
+    graphHoverNode = findGraphNodeAt(pt) || null;
+    if (graphHoverNode) {
+      graphTooltip.textContent = graphHoverNode.title;
+      graphTooltip.style.left = `${e.clientX + 12}px`;
+      graphTooltip.style.top = `${e.clientY + 12}px`;
+      graphTooltip.classList.remove("hidden");
+    } else {
+      graphTooltip.classList.add("hidden");
+    }
+  }
+});
+graphCanvas.addEventListener("pointerup", (e) => {
+  if (graphDragNode && !graphDraggingCanvas) {
+    const pt = graphPointFromEvent(e);
+    const moved = findGraphNodeAt(pt) === graphDragNode;
+    // A drag that never really moved the pointer counts as a click.
+    if (moved && Math.abs(graphDragNode.vx) < 0.01) {
+      /* click-through handled by dedicated click listener below */
+    }
+  }
+  graphDragNode = null;
+  graphDraggingCanvas = false;
+});
+graphCanvas.addEventListener("click", (e) => {
+  const pt = graphPointFromEvent(e);
+  const node = findGraphNodeAt(pt);
+  if (node) {
+    closeGraphView();
+    goToNote(node.id);
+  }
+});
+
+function openGraphView() {
+  graphViewOverlay.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    resizeGraphCanvas();
+    graphPan = { x: 0, y: 0 };
+    const data = buildGraphData();
+    graphNodes = data.nodes;
+    graphEdges = data.edges;
+    graphViewCount.textContent = `${graphNodes.length} note${graphNodes.length > 1 ? "s" : ""} · ${graphEdges.length} lien${graphEdges.length > 1 ? "s" : ""}`;
+    if (graphAnimFrame) cancelAnimationFrame(graphAnimFrame);
+    graphLoop();
+  });
+}
+
+function closeGraphView() {
+  graphViewOverlay.classList.add("hidden");
+  if (graphAnimFrame) cancelAnimationFrame(graphAnimFrame);
+  graphAnimFrame = null;
+}
+
+graphViewBtn.addEventListener("click", () => {
+  showList();
+  openGraphView();
+});
+graphViewClose.addEventListener("click", closeGraphView);
+window.addEventListener("resize", () => {
+  if (!graphViewOverlay.classList.contains("hidden")) resizeGraphCanvas();
+});
+
 function addBacklinksSection(title, entries, emptyText) {
   const header = document.createElement("li");
   header.className = "backlinks-section-header";
@@ -6857,6 +7112,7 @@ function cmdkActionItems(query) {
     { label: "Voir la corbeille", sub: "", action: () => { showList(); setListView("trash"); } },
     { label: "Sélection multiple", sub: "Archiver / déplacer / supprimer plusieurs notes", action: () => { showList(); setSelectionMode(true); } },
     { label: "Note du jour", sub: "Journal", action: () => document.getElementById("journal-today-btn").click() },
+    { label: "Vue graphe", sub: "", action: () => document.getElementById("graph-view-btn").click() },
   ];
   // These only make sense with a note actually open — listed here instead of
   // buried in the editor's own "..." menu, since ⌘K is meant to be the one
