@@ -700,12 +700,26 @@ button {
 
 .history-item {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
   font-size: 13px;
   padding: 6px 2px;
   border-bottom: 1px solid var(--border);
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.history-row > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .history-item button {
@@ -718,6 +732,85 @@ button {
   border-radius: 999px;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.history-item button.link-btn {
+  background: none;
+  color: var(--muted);
+  padding: 6px 8px;
+  font-weight: 500;
+}
+
+.outline-item {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.outline-fold-btn {
+  min-width: 22px;
+  text-align: center;
+}
+
+.outline-item span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.text-editor .outline-collapsed {
+  display: none;
+}
+
+.history-diff {
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.history-diff del {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  text-decoration: line-through;
+}
+
+.history-diff ins {
+  background: color-mix(in srgb, #2e7d6b 25%, transparent);
+  text-decoration: none;
+}
+
+.backlinks-section-header {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 10px 2px 2px;
+}
+
+.backlink-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.backlink-extract {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .history-empty {
@@ -807,6 +900,20 @@ button {
   gap: 4px;
   font-size: 12px;
   color: var(--muted);
+}
+
+.find-options-row {
+  display: flex;
+  gap: 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 4px 0;
+}
+
+.find-options-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .sync-textarea {
@@ -1294,6 +1401,58 @@ button {
   margin-bottom: 12px;
 }
 
+.properties-row {
+  margin-bottom: 12px;
+}
+
+.properties-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.property-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gold) 14%, transparent);
+  color: var(--gold-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.property-chip button {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0.7;
+  padding: 0;
+}
+
+.property-chip button:hover {
+  opacity: 1;
+}
+
+.properties-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px dashed var(--border);
+  background: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  padding: 4px 2px;
+}
+
+.properties-input:focus {
+  outline: none;
+  border-bottom-color: var(--gold);
+}
+
 .word-count {
   font-size: 12px;
   color: var(--muted);
@@ -1523,10 +1682,75 @@ select option {
   background: var(--accent);
 }
 
+.editor-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
 .page-scroll {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: 4px 4px 24px;
+}
+
+.split-view-pane {
+  flex: 1;
+  min-width: 0;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.split-view-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.split-view-header input {
+  flex: 1;
+}
+
+.split-view-results {
+  max-height: 160px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.split-view-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--paper);
+  color: var(--paper-text);
+  border-radius: var(--radius);
+  font-size: 0.95em;
+}
+
+.split-view-content .split-view-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .editor-body {
+    flex-direction: column;
+  }
+  .split-view-pane {
+    max-width: none;
+    max-height: 45vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
 }
 
 .note-page {
@@ -1764,7 +1988,8 @@ select option {
   overflow: hidden;
 }
 
-.text-editor table.note-table td {
+.text-editor table.note-table td,
+.text-editor table.note-table th {
   border: 1px solid var(--border);
   padding: 8px 10px;
   min-width: 60px;
@@ -1777,7 +2002,19 @@ select option {
   font-weight: 600;
 }
 
-.text-editor table.note-table td:focus {
+.text-editor table.note-table th {
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.text-editor table.note-table th:hover {
+  background: color-mix(in srgb, var(--gold) 26%, transparent);
+}
+
+.text-editor table.note-table td:focus,
+.text-editor table.note-table th:focus {
   outline: none;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
@@ -1786,6 +2023,60 @@ select option {
   color: var(--paper-gold-ink);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.text-editor .note-code {
+  position: relative;
+  margin: 0.6em 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  overflow-x: auto;
+}
+
+.text-editor .note-code code {
+  display: block;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.85em;
+  white-space: pre;
+  outline: none;
+}
+
+.note-code-highlight-btn {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--gold) 20%, transparent);
+  color: var(--gold-ink);
+  cursor: pointer;
+  z-index: 1;
+}
+
+.text-editor .note-callout {
+  margin: 0.6em 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border-left: 4px solid var(--gold);
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+  outline: none;
+}
+
+.text-editor .note-callout-warning {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.text-editor blockquote {
+  margin: 0.6em 0;
+  padding: 4px 16px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  font-style: italic;
 }
 
 .text-editor .transclusion {
@@ -1999,7 +2290,8 @@ input:focus-visible,
 
 button:focus-visible,
 a:focus-visible,
-.cmdk-item:focus-visible {
+.cmdk-item:focus-visible,
+.note-main:focus-visible {
   outline: none;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 40%, transparent);
   border-radius: 8px;
@@ -2049,6 +2341,60 @@ a:focus-visible,
   background: var(--accent);
   color: var(--accent-text);
   border-color: var(--accent);
+}
+
+/* Reading mode: wider measure, taller line-height, chrome hidden — a
+   consultation view, not a writing ritual (no frame, no ambient sound, the
+   split-view pane and secondary panels stay reachable). */
+#editor-screen.reading-mode .folder-row,
+#editor-screen.reading-mode .mode-switch,
+#editor-screen.reading-mode #format-toolbar,
+#editor-screen.reading-mode #draw-toolbar,
+#editor-screen.reading-mode .draw-hint,
+#editor-screen.reading-mode .grow-page-btn {
+  display: none !important;
+}
+
+#editor-screen.reading-mode .note-page {
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+#editor-screen.reading-mode .text-editor {
+  font-size: 1.12em;
+  line-height: 1.85;
+  cursor: default;
+}
+
+#editor-screen.reading-mode .title-input {
+  text-align: center;
+  pointer-events: none;
+}
+
+#reading-mode-btn.active,
+#editor-screen.reading-mode #reading-mode-btn {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.reading-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 3;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.reading-progress span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--gold);
+  transition: width 0.15s linear;
 }
 
 /* A discreet gold-rimmed frame + a faint cinematic vignette at the screen
@@ -2240,6 +2586,39 @@ a:focus-visible,
   background: var(--accent);
 }
 
+.wikilink-autocomplete {
+  position: absolute;
+  z-index: 20;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-hover);
+}
+
+.wikilink-autocomplete-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.wikilink-autocomplete-item.active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.wikilink-autocomplete-item.create {
+  color: var(--gold-ink);
+  font-weight: 600;
+}
+
 .cmdk-item.active .cmdk-item-label,
 .cmdk-item.active .cmdk-item-sub {
   color: var(--accent-text);
@@ -2250,6 +2629,66 @@ a:focus-visible,
   text-align: center;
   font-size: 13px;
   color: var(--muted);
+}
+
+.journal-calendar-box {
+  max-height: none;
+  padding: 14px;
+  gap: 10px;
+}
+
+.journal-calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.journal-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.journal-cal-weekday {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+
+.journal-cal-day {
+  aspect-ratio: 1;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  position: relative;
+}
+
+.journal-cal-day:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.journal-cal-day.today {
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1.5px var(--gold);
+}
+
+.journal-cal-day.has-entry::after {
+  content: "";
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--gold);
 }
 
 /* --- Desktop layout ---

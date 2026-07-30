@@ -4,18 +4,30 @@ const FIREBASE_CDN = "https://www.gstatic.com/firebasejs/10.13.0";
 const DB_NAME = "noteflow";
 const STORE = "notes";
 
+// Singleton connection: the autosave path calls dbPut every ~500ms while
+// typing, and each of these used to open (and never close) a brand new
+// IDBDatabase — an unbounded number of live connections over a long writing
+// session, and a future schema version bump would hang forever in
+// "blocked" waiting for connections that were never going to close.
+let dbPromise = null;
 function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: "id" });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) {
+          db.createObjectStore(STORE, { keyPath: "id" });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => {
+        dbPromise = null;
+        reject(req.error);
+      };
+    });
+  }
+  return dbPromise;
 }
 
 async function dbGetAll() {
@@ -58,6 +70,7 @@ const PREF_KEYS = {
   savedSearches: "noteflow.savedSearches",
   thickInk: "noteflow.thickInk",
   folderCovers: "noteflow.folderCovers",
+  snippets: "noteflow.snippets",
 };
 const loadPref = (key, fallback) => {
   try {
@@ -207,7 +220,13 @@ themeToggle.addEventListener("click", (e) => {
 
 // --- Daily streak (local, based on days with at least one save) ---
 const streakBadge = document.getElementById("streak-badge");
-const dateKey = (ts) => new Date(ts).toISOString().slice(0, 10);
+// Local calendar day, not UTC: toISOString() rolls over at midnight UTC,
+// so writing between midnight and 1-2am in France (UTC+1/+2) used to count
+// against the *previous* day and could silently break the streak.
+const dateKey = (ts) => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 function updateStreakBadge() {
   const count = loadPref(PREF_KEYS.streakCount, 0);
@@ -231,6 +250,8 @@ updateStreakBadge();
 function setupMenu(btnId, panelId) {
   const btn = document.getElementById(btnId);
   const panel = document.getElementById(panelId);
+  panel.setAttribute("role", "menu");
+  panel.querySelectorAll(".menu-item").forEach((item) => item.setAttribute("role", "menuitem"));
   btn.setAttribute("aria-haspopup", "menu");
   btn.setAttribute("aria-expanded", "false");
   btn.addEventListener("click", (e) => {
@@ -251,6 +272,16 @@ function setupMenu(btnId, panelId) {
   });
   return panel;
 }
+// Escape closing a menu used to leave focus stranded on whatever was under
+// the pointer (or nowhere) instead of back on the button that opened it.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  document.querySelectorAll(".menu-wrap").forEach((wrap) => {
+    const panel = wrap.querySelector(".menu-panel");
+    const btn = wrap.querySelector(".icon-btn");
+    if (panel && btn && !panel.classList.contains("hidden")) btn.focus();
+  });
+});
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".menu-wrap")) {
     document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
@@ -308,6 +339,8 @@ contrastToggleBtn.addEventListener("click", () => {
 
 // --- Custom dropdowns (native <select> stays as the source of truth; this
 // only replaces how it's presented, so all existing "change" logic keeps working) ---
+let customSelectIdCounter = 0;
+
 function enhanceSelect(select) {
   const wrap = document.createElement("div");
   wrap.className = "custom-select";
@@ -318,22 +351,47 @@ function enhanceSelect(select) {
   select.setAttribute("tabindex", "-1");
   select.setAttribute("aria-hidden", "true");
 
+  const listId = `custom-select-list-${++customSelectIdCounter}`;
+
   const trigger = document.createElement("button");
   trigger.type = "button";
   trigger.className = "custom-select-trigger";
-  if (select.title) trigger.title = select.title;
+  trigger.setAttribute("role", "combobox");
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.setAttribute("aria-controls", listId);
+  // The global "title -> aria-label" pass (see above) only runs once at
+  // load, before enhanceSelect() ever creates this button — so it never
+  // reached this element. Set it directly instead of relying on that pass.
+  if (select.title) {
+    trigger.title = select.title;
+    trigger.setAttribute("aria-label", select.title);
+  }
   wrap.appendChild(trigger);
 
   const list = document.createElement("div");
   list.className = "custom-select-list hidden";
+  list.id = listId;
+  list.setAttribute("role", "listbox");
   wrap.appendChild(list);
+
+  let optionItems = [];
+
+  function focusOption(index) {
+    if (!optionItems.length) return;
+    const clamped = Math.max(0, Math.min(index, optionItems.length - 1));
+    optionItems[clamped].focus();
+  }
 
   function renderOptions() {
     list.innerHTML = "";
-    Array.from(select.options).forEach((opt, i) => {
+    optionItems = Array.from(select.options).map((opt, i) => {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "custom-select-option" + (i === select.selectedIndex ? " selected" : "");
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-selected", i === select.selectedIndex ? "true" : "false");
+      item.tabIndex = -1;
       item.textContent = opt.textContent;
       if (opt.style.fontFamily) item.style.fontFamily = opt.style.fontFamily;
       item.addEventListener("click", () => {
@@ -341,8 +399,24 @@ function enhanceSelect(select) {
         select.dispatchEvent(new Event("change", { bubbles: true }));
         refresh();
         closeList();
+        trigger.focus();
+      });
+      item.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          focusOption(optionItems.indexOf(item) + 1);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          focusOption(optionItems.indexOf(item) - 1);
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          item.click();
+        } else if (e.key === "Tab") {
+          closeList();
+        }
       });
       list.appendChild(item);
+      return item;
     });
   }
   function updateTrigger() {
@@ -352,11 +426,13 @@ function enhanceSelect(select) {
   function closeList() {
     list.classList.add("hidden");
     trigger.classList.remove("open");
+    trigger.setAttribute("aria-expanded", "false");
   }
   function openList() {
     renderOptions();
     list.classList.remove("hidden");
     trigger.classList.add("open");
+    trigger.setAttribute("aria-expanded", "true");
   }
   function refresh() {
     updateTrigger();
@@ -371,11 +447,21 @@ function enhanceSelect(select) {
     if (list.classList.contains("hidden")) openList();
     else closeList();
   });
+  trigger.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (list.classList.contains("hidden")) openList();
+      focusOption(select.selectedIndex);
+    }
+  });
   document.addEventListener("click", (e) => {
     if (!wrap.contains(e.target)) closeList();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeList();
+    if (e.key === "Escape" && !list.classList.contains("hidden")) {
+      closeList();
+      trigger.focus();
+    }
   });
 
   updateTrigger();
@@ -473,6 +559,9 @@ const listScreen = document.getElementById("list-screen");
 const editorScreen = document.getElementById("editor-screen");
 
 function showList() {
+  if (activeRecorder && activeRecorder.state === "recording") {
+    activeRecorder.stop();
+  }
   // Leaving a locked note's editor always re-locks it in memory too: its
   // plaintext body/drawing/history are dropped and the unlock key forgotten,
   // so reopening it requires the PIN again, exactly like before encryption.
@@ -485,6 +574,7 @@ function showList() {
   listScreen.classList.add("active");
   editorScreen.classList.remove("active");
   stopAmbientFocusSound();
+  document.getElementById("split-view-pane").classList.add("hidden");
   renderList();
 }
 
@@ -513,14 +603,26 @@ const exportBtn = document.getElementById("export-btn");
 const importBtn = document.getElementById("import-btn");
 const importInput = document.getElementById("import-input");
 
-exportBtn.addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(notes, null, 2)], { type: "application/json" });
+// Firefox (and historically Safari) don't guarantee the download has
+// actually started by the time a.click() returns synchronously — revoking
+// the object URL immediately after could invalidate it before the browser
+// gets to it, silently producing no download at all. Appending the anchor
+// to the DOM and delaying the revoke gives every browser a real chance to
+// pick it up first.
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `noteflow-export-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+exportBtn.addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(notes, null, 2)], { type: "application/json" });
+  downloadBlob(blob, `noteflow-export-${new Date().toISOString().slice(0, 10)}.json`);
 });
 
 importBtn.addEventListener("click", () => importInput.click());
@@ -645,6 +747,12 @@ importInput.addEventListener("change", async () => {
       const packet = JSON.parse(await file.text());
       const count = await importEncryptedPacket(packet);
       if (count) showToast("Note déchiffrée et importée");
+    } else if (name.endsWith(".md")) {
+      const note = importMarkdown(await file.text());
+      notes.unshift(note);
+      await persistNote(note);
+      renderList();
+      showToast("Note importée depuis Markdown");
     } else {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -655,6 +763,15 @@ importInput.addEventListener("change", async () => {
       let updated = 0;
       for (const note of imported) {
         if (!note || !note.id) continue;
+        if (note.html) note.html = sanitizeNoteHtml(note.html);
+        // A hand-edited or corrupted export can be missing fields the rest
+        // of the app assumes exist: no updatedAt broke sort ordering (NaN),
+        // and locked: true with neither encBlob nor pinCode made a note
+        // permanently unopenable (every unlock attempt hit the same
+        // "no pin set" throw, forever, with no way back in).
+        if (typeof note.updatedAt !== "number" || Number.isNaN(note.updatedAt)) note.updatedAt = Date.now();
+        if (typeof note.createdAt !== "number" || Number.isNaN(note.createdAt)) note.createdAt = note.updatedAt;
+        if (note.locked && !note.encBlob && !note.pinCode) note.locked = false;
         const index = notes.findIndex((n) => n.id === note.id);
         if (index === -1) {
           notes.push(note);
@@ -678,6 +795,23 @@ function stripHtml(html) {
   const div = document.createElement("div");
   div.innerHTML = html || "";
   return (div.textContent || "").trim();
+}
+
+// Same caching rationale as getPreview() just below (keyed by note id, not
+// by the html string itself — an unbounded cache keyed by content would
+// just be a slower-growing version of the leak getPreview's cache used to
+// have): parsing HTML runs once per note per renderList() call otherwise
+// (every search keystroke, every 30s reminder/ephemeral tick).
+const checklistProgressCache = new Map();
+function checklistProgress(noteId, html) {
+  const cached = checklistProgressCache.get(noteId);
+  if (cached && cached.html === html) return cached.result;
+  const div = document.createElement("div");
+  div.innerHTML = html || "";
+  const boxes = div.querySelectorAll(".checklist-item input[type=checkbox]");
+  const result = { total: boxes.length, checked: Array.from(boxes).filter((b) => b.hasAttribute("checked")).length };
+  checklistProgressCache.set(noteId, { html, result });
+  return result;
 }
 
 // Parsing HTML for a text preview is the costliest part of rendering the list
@@ -733,10 +867,18 @@ const FOLDER_COVER_TEXTURES = [
   "linear-gradient(135deg, #3A6B8C, #4A5FA5)",
 ];
 
+// In-memory cache: folderDisplayColor() runs once per note card and once per
+// folder chip on every renderList() — reading + JSON.parse-ing localStorage
+// that often (every keystroke in the search box, every 30s reminder tick) is
+// wasted synchronous work for a value that only ever changes via the cover
+// swatch picker, which already goes through saveFolderCovers().
+let folderCoversCache = null;
 function loadFolderCovers() {
-  return loadPref(PREF_KEYS.folderCovers, {});
+  if (!folderCoversCache) folderCoversCache = loadPref(PREF_KEYS.folderCovers, {});
+  return folderCoversCache;
 }
 function saveFolderCovers(map) {
+  folderCoversCache = map;
   savePref(PREF_KEYS.folderCovers, map);
 }
 
@@ -807,6 +949,72 @@ function renderTagManager() {
   });
 }
 
+// --- Snippets: user-defined trigger -> expansion pairs, expanded live while
+// typing (trigger followed by a space or Enter). "$|" in the expansion text
+// marks a single cursor placement after expansion — a lighter-weight
+// alternative to full multi-tabstop snippet engines, chosen because the
+// editor's contenteditable model has no native concept of linked tabstops
+// to build that on top of without a much larger rewrite. ---
+const snippetManagerBtn = document.getElementById("manage-snippets-btn");
+const snippetManagerPanel = document.getElementById("snippet-manager-panel");
+const snippetManagerListEl = document.getElementById("snippet-manager-list");
+const snippetTriggerInput = document.getElementById("snippet-trigger-input");
+const snippetExpansionInput = document.getElementById("snippet-expansion-input");
+const snippetAddBtn = document.getElementById("snippet-add-btn");
+
+function loadSnippets() {
+  return loadPref(PREF_KEYS.snippets, []);
+}
+function saveSnippets(list) {
+  savePref(PREF_KEYS.snippets, list);
+}
+
+function renderSnippetManager() {
+  const snippets = loadSnippets();
+  snippetManagerListEl.innerHTML = "";
+  if (!snippets.length) {
+    snippetManagerListEl.innerHTML = '<li class="history-empty">Aucune abréviation pour l\'instant.</li>';
+    return;
+  }
+  snippets.forEach((s, i) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = `${s.trigger} → ${s.expansion}`;
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "link-btn danger";
+    deleteBtn.textContent = "Supprimer";
+    deleteBtn.addEventListener("click", () => {
+      const list = loadSnippets();
+      list.splice(i, 1);
+      saveSnippets(list);
+      renderSnippetManager();
+    });
+    li.appendChild(label);
+    li.appendChild(deleteBtn);
+    snippetManagerListEl.appendChild(li);
+  });
+}
+
+snippetManagerBtn.addEventListener("click", () => {
+  const opening = snippetManagerPanel.classList.contains("hidden");
+  snippetManagerPanel.classList.toggle("hidden");
+  if (opening) renderSnippetManager();
+});
+
+snippetAddBtn.addEventListener("click", () => {
+  const trigger = snippetTriggerInput.value.trim();
+  const expansion = snippetExpansionInput.value.trim();
+  if (!trigger || !expansion) return;
+  const list = loadSnippets().filter((s) => s.trigger !== trigger);
+  list.push({ trigger, expansion });
+  saveSnippets(list);
+  snippetTriggerInput.value = "";
+  snippetExpansionInput.value = "";
+  renderSnippetManager();
+});
+
 // newTag === null removes the tag entirely (used by the "Supprimer" action);
 // otherwise renaming onto an existing tag merges the two automatically,
 // since tags are deduplicated per note.
@@ -821,6 +1029,140 @@ async function renameTagEverywhere(oldTag, newTag) {
   showToast(newTag ? `#${oldTag} renommé en #${newTag}` : `#${oldTag} supprimé de ${affected.length} note(s)`);
 }
 
+// --- Notebook hygiene dashboard: a diagnostic pass over the whole notebook
+// (broken links, duplicate titles, tags used once, notes gone stale, orphaned
+// folder covers), each finding with a one-click fix — not a graph view, just
+// an actionable anomaly list. ---
+const hygieneBtn = document.getElementById("hygiene-btn");
+const hygienePanel = document.getElementById("hygiene-panel");
+const hygieneListEl = document.getElementById("hygiene-list");
+const SIX_MONTHS_MS = 183 * 24 * 60 * 60 * 1000;
+
+function addHygieneSection(title, entries, emptyText) {
+  const header = document.createElement("li");
+  header.className = "backlinks-section-header";
+  header.textContent = title;
+  hygieneListEl.appendChild(header);
+  if (!entries.length) {
+    const li = document.createElement("li");
+    li.className = "history-empty";
+    li.textContent = emptyText;
+    hygieneListEl.appendChild(li);
+    return;
+  }
+  entries.forEach(({ label, actionLabel, action }) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const span = document.createElement("span");
+    span.textContent = label;
+    li.appendChild(span);
+    if (action) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = actionLabel || "Ouvrir";
+      btn.addEventListener("click", action);
+      li.appendChild(btn);
+    }
+    hygieneListEl.appendChild(li);
+  });
+}
+
+function renderHygieneDashboard() {
+  hygieneListEl.innerHTML = "";
+  const active = notes.filter((n) => !n.deletedAt);
+
+  const brokenLinks = [];
+  active.forEach((note) => {
+    const container = document.createElement("div");
+    container.innerHTML = note.html || "";
+    container.querySelectorAll("[data-note-id]").forEach((el) => {
+      const targetId = el.dataset.noteId;
+      if (!notes.some((n) => n.id === targetId && !n.deletedAt)) {
+        brokenLinks.push({
+          label: `« ${note.title || "Sans titre"} » contient un lien brisé`,
+          actionLabel: "Ouvrir",
+          action: () => {
+            hygienePanel.classList.add("hidden");
+            goToNote(note.id);
+          },
+        });
+      }
+    });
+  });
+
+  const titleGroups = new Map();
+  active.forEach((n) => {
+    const key = (n.title || "").trim().toLowerCase();
+    if (!key) return;
+    if (!titleGroups.has(key)) titleGroups.set(key, []);
+    titleGroups.get(key).push(n);
+  });
+  const duplicates = [...titleGroups.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => ({
+      label: `${group.length} notes intitulées « ${group[0].title} »`,
+      actionLabel: "Voir la 1ère",
+      action: () => {
+        hygienePanel.classList.add("hidden");
+        goToNote(group[0].id);
+      },
+    }));
+
+  const tagCounts = new Map();
+  active.forEach((n) => (n.tags || []).forEach((t) => tagCounts.set(t, (tagCounts.get(t) || 0) + 1)));
+  const rareTags = [...tagCounts.entries()]
+    .filter(([, count]) => count === 1)
+    .map(([tag]) => ({
+      label: `#${tag} n'est utilisé que sur une seule note`,
+      actionLabel: "Gérer les tags",
+      action: () => {
+        hygienePanel.classList.add("hidden");
+        tagManagerBtn.click();
+      },
+    }));
+
+  const stale = active
+    .filter((n) => {
+      const lastTouch = Math.max(n.lastOpenedAt || 0, n.updatedAt || 0);
+      return Date.now() - lastTouch > SIX_MONTHS_MS;
+    })
+    .map((n) => ({
+      label: `« ${n.title || "Sans titre"} » n'a pas été rouverte depuis plus de 6 mois`,
+      actionLabel: "Ouvrir",
+      action: () => {
+        hygienePanel.classList.add("hidden");
+        goToNote(n.id);
+      },
+    }));
+
+  const usedFolders = new Set(active.map((n) => n.folder).filter(Boolean));
+  const covers = loadFolderCovers();
+  const orphanCovers = Object.keys(covers)
+    .filter((folder) => !usedFolders.has(folder))
+    .map((folder) => ({
+      label: `Couverture enregistrée pour le dossier « ${folder} », qui n'a plus de note`,
+      actionLabel: "Nettoyer",
+      action: () => {
+        const current = loadFolderCovers();
+        delete current[folder];
+        saveFolderCovers(current);
+        renderHygieneDashboard();
+      },
+    }));
+
+  addHygieneSection("Liens brisés", brokenLinks, "Aucun lien brisé détecté.");
+  addHygieneSection("Titres en doublon", duplicates, "Aucun doublon de titre.");
+  addHygieneSection("Tags peu utilisés", rareTags, "Chaque tag est utilisé sur plusieurs notes.");
+  addHygieneSection("Notes oubliées (6+ mois)", stale, "Aucune note oubliée.");
+  addHygieneSection("Couvertures de dossier orphelines", orphanCovers, "Rien à nettoyer.");
+}
+
+hygieneBtn.addEventListener("click", () => {
+  const opening = hygienePanel.classList.contains("hidden");
+  hygienePanel.classList.toggle("hidden");
+  if (opening) renderHygieneDashboard();
+});
+
 let draggedNoteId = null;
 
 function reorderNotes(targetId) {
@@ -830,10 +1172,17 @@ function reorderNotes(targetId) {
   if (fromIndex === -1 || toIndex === -1) return;
   const [moved] = notes.splice(fromIndex, 1);
   notes.splice(toIndex, 0, moved);
-  notes.forEach((n, i) => {
-    n.order = i;
-    persistNote(n);
-  });
+  // Only the notes between the old and new position actually change order —
+  // writing all of them (IndexedDB + a Firestore setDoc each, unawaited) on
+  // every single drag was a real freeze/quota risk on a notebook with
+  // hundreds of notes, for a reorder that only ever moves one note past a
+  // contiguous run of others.
+  const lo = Math.min(fromIndex, toIndex);
+  const hi = Math.max(fromIndex, toIndex);
+  for (let i = lo; i <= hi; i++) {
+    notes[i].order = i;
+    persistNote(notes[i]);
+  }
   renderList();
 }
 
@@ -848,24 +1197,45 @@ function renderFolderFilters() {
   const tags = allTags();
   folderFiltersEl.classList.toggle("hidden", folders.length === 0 && tags.length === 0);
   folderFiltersEl.innerHTML = "";
+  // One pass over notes to count exact-folder matches, instead of filtering
+  // the full notes array once per folder chip below (that O(folders × notes)
+  // scan was real: a few dozen folders over a notebook of a thousand notes
+  // means tens of thousands of comparisons on every render, including on
+  // every keystroke in the search box).
+  const exactCounts = new Map();
+  notes.forEach((n) => {
+    if (n.deletedAt || !n.folder) return;
+    exactCounts.set(n.folder, (exactCounts.get(n.folder) || 0) + 1);
+  });
   folders.forEach((folder) => {
     const parts = folder.split("/");
     const depth = parts.length - 1;
-    const chip = document.createElement("button");
-    chip.type = "button";
+    // A <div role="button">, not a <button>: it hosts a real, independently
+    // focusable <button> (the cover swatch) as a child, and interactive
+    // content nested inside a native <button> is invalid HTML that browsers
+    // handle inconsistently for keyboard/AT users.
+    const chip = document.createElement("div");
+    chip.setAttribute("role", "button");
+    chip.tabIndex = 0;
     chip.className = "tag-filter-chip folder-chip" + (activeFolderFilter === folder ? " active" : "");
     if (depth > 0) chip.style.marginLeft = `${depth * 14}px`;
     // A thicker "spine" for folders holding more notes — like books lined
-    // up on a shelf by how full they are.
-    const noteCount = notes.filter((n) => !n.deletedAt && (n.folder === folder || (n.folder || "").startsWith(folder + "/"))).length;
+    // up on a shelf by how full they are. Includes notes filed in
+    // subfolders, same as the filter itself does.
+    let noteCount = 0;
+    for (const [f, count] of exactCounts) {
+      if (f === folder || f.startsWith(folder + "/")) noteCount += count;
+    }
     chip.style.borderLeftWidth = `${Math.min(2 + Math.round(noteCount / 2), 8)}px`;
     chip.title = folder;
     const labelSpan = document.createElement("span");
     labelSpan.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
-    const coverSwatch = document.createElement("span");
+    const coverSwatch = document.createElement("button");
+    coverSwatch.type = "button";
     coverSwatch.className = "folder-cover-swatch";
     coverSwatch.style.background = folderDisplayColor(folder);
     coverSwatch.title = "Choisir une couverture pour ce dossier";
+    coverSwatch.setAttribute("aria-label", "Choisir une couverture pour ce dossier");
     coverSwatch.addEventListener("click", (e) => {
       e.stopPropagation();
       const covers = loadFolderCovers();
@@ -876,6 +1246,12 @@ function renderFolderFilters() {
     });
     chip.appendChild(labelSpan);
     chip.appendChild(coverSwatch);
+    chip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        chip.click();
+      }
+    });
     chip.addEventListener("click", () => {
       activeFolderFilter = activeFolderFilter === folder ? null : folder;
       renderList();
@@ -915,6 +1291,41 @@ function renderFolderFilters() {
 
 function escapeHtml(str) {
   return str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Notes can arrive as HTML from three places we don't fully control: a JSON
+// import, a decrypted .noteflow packet, and a Firestore sync snapshot (from
+// whoever knows the sync code). All three get run through this before their
+// html is ever assigned via innerHTML, so a crafted "<img onerror=...>" or
+// "<script>" can't execute against the note's own author.
+const SANITIZE_DANGEROUS_TAGS = new Set(["script", "iframe", "object", "embed", "link", "meta", "style", "base", "form"]);
+
+function sanitizeNoteHtml(html) {
+  if (!html) return html;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const clean = (root) => {
+    Array.from(root.children).forEach((el) => {
+      const tag = el.tagName.toLowerCase();
+      if (SANITIZE_DANGEROUS_TAGS.has(tag)) {
+        el.remove();
+        return;
+      }
+      Array.from(el.attributes).forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        const value = attr.value.trim();
+        if (name.startsWith("on")) {
+          el.removeAttribute(attr.name);
+        } else if ((name === "href" || name === "src") && /^\s*javascript:/i.test(value)) {
+          el.removeAttribute(attr.name);
+        } else if (name === "src" && /^\s*data:(?!image\/|audio\/)/i.test(value)) {
+          el.removeAttribute(attr.name);
+        }
+      });
+      clean(el);
+    });
+  };
+  clean(doc.body);
+  return doc.body.innerHTML;
 }
 
 function highlightMatch(text, query) {
@@ -1025,12 +1436,86 @@ guardDoubleClick(document.getElementById("sel-move-btn"), async () => {
   setSelectionMode(false);
 });
 
+// A small search-query language on top of plain substring search:
+// tag:travail, dossier:Travail/Projets (also matches subfolders), est:verrouillée
+// / archivée / épinglée, avant:2026-01-01 / apres:2026-01-01, "exact phrase",
+// and a leading "-" negates any of the above. Anything left over after
+// pulling these out is still free-text, ANDed with the rest — so a plain
+// search like before ("facture avril") keeps working exactly the same.
+const SEARCH_OP_ALIASES = { folder: "dossier" };
+function parseSearchQuery(raw) {
+  const tokens = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(raw))) tokens.push(m[1] !== undefined ? m[1] : m[2]);
+  return tokens
+    .map((tok) => {
+      let text = tok;
+      let negate = false;
+      if (text.startsWith("-") && text.length > 1) {
+        negate = true;
+        text = text.slice(1);
+      }
+      const opMatch = /^(tag|dossier|folder|avant|apres|après|est|prop):(.+)$/i.exec(text);
+      if (opMatch) {
+        let op = opMatch[1].toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+        op = SEARCH_OP_ALIASES[op] || op;
+        return { negate, op, value: opMatch[2].toLowerCase() };
+      }
+      return { negate, text: text.toLowerCase() };
+    })
+    .filter((c) => c.op || c.text);
+}
+
+function noteHaystack(note) {
+  return (note.title + " " + (note.folder || "") + " " + (note.tags || []).join(" ") + " " + (note.locked ? "" : getPreview(note))).toLowerCase();
+}
+
+function clauseMatches(note, clause) {
+  if (clause.op === "tag") return (note.tags || []).some((t) => t.toLowerCase() === clause.value);
+  if (clause.op === "dossier") return (note.folder || "").toLowerCase().startsWith(clause.value);
+  if (clause.op === "avant" || clause.op === "apres") {
+    const d = Date.parse(clause.value);
+    if (Number.isNaN(d)) return false;
+    return clause.op === "avant" ? note.updatedAt < d : note.updatedAt > d;
+  }
+  if (clause.op === "est") {
+    const v = clause.value.normalize("NFD").replace(/[̀-ͯ]/g, "");
+    if (v.startsWith("verrouill")) return !!note.locked;
+    if (v.startsWith("archiv")) return !!note.archived;
+    if (v.startsWith("epingl")) return !!note.pinned;
+    return false;
+  }
+  if (clause.op === "prop") {
+    const sep = clause.value.indexOf(":");
+    const propKey = (sep === -1 ? clause.value : clause.value.slice(0, sep)).trim();
+    const propValue = sep === -1 ? null : clause.value.slice(sep + 1).trim();
+    const props = note.properties || {};
+    const actualKey = Object.keys(props).find((k) => k.toLowerCase() === propKey);
+    if (!actualKey) return false;
+    return propValue === null || props[actualKey].toLowerCase() === propValue;
+  }
+  return noteHaystack(note).includes(clause.text);
+}
+
+function noteMatchesQuery(note, clauses) {
+  return clauses.every((c) => (c.negate ? !clauseMatches(note, c) : clauseMatches(note, c)));
+}
+
 function renderList() {
   notesListEl.classList.toggle("selection-mode", selectionMode);
   if (selectionMode) updateSelectionCount();
   renderFolderFilters();
   renderSavedSearchChips();
-  const query = searchQuery.trim().toLowerCase();
+  const query = searchQuery.trim();
+  const queryClauses = query ? parseSearchQuery(query) : [];
+  // Highlighting only makes sense for the free-text part of the query — a
+  // "tag:travail" or "est:archivée" clause has nothing literal to underline.
+  const highlightTerm = queryClauses
+    .filter((c) => !c.op && !c.negate)
+    .map((c) => c.text)
+    .join(" ")
+    .trim();
   let visible = notes.filter((n) => {
     if (listView === "trash" && !n.deletedAt) return false;
     if (listView === "archived" && (!n.archived || n.deletedAt)) return false;
@@ -1042,18 +1527,7 @@ function renderList() {
     )
       return false;
     if (activeTagFilter && !(n.tags || []).includes(activeTagFilter)) return false;
-    if (query) {
-      const haystack = (
-        n.title +
-        " " +
-        (n.folder || "") +
-        " " +
-        (n.tags || []).join(" ") +
-        " " +
-        (n.locked ? "" : getPreview(n))
-      ).toLowerCase();
-      if (!haystack.includes(query)) return false;
-    }
+    if (queryClauses.length && !noteMatchesQuery(n, queryClauses)) return false;
     return true;
   });
 
@@ -1067,7 +1541,18 @@ function renderList() {
 
   notesListEl.classList.toggle("manual-mode", sortMode === "manual");
   notesListEl.innerHTML = "";
-  notesEmptyEl.classList.toggle("show", visible.length === 0);
+  const isEmpty = visible.length === 0;
+  notesEmptyEl.classList.toggle("show", isEmpty);
+  if (isEmpty) {
+    // The static "Touche + pour commencer" message was misleading whenever
+    // the empty result came from a search, a folder/tag filter, or the
+    // trash/archive view rather than an actually empty notebook.
+    if (query) notesEmptyEl.textContent = "Aucune note ne correspond à ta recherche.";
+    else if (activeFolderFilter || activeTagFilter) notesEmptyEl.textContent = "Aucune note dans ce filtre.";
+    else if (listView === "trash") notesEmptyEl.textContent = "La corbeille est vide.";
+    else if (listView === "archived") notesEmptyEl.textContent = "Aucune note archivée.";
+    else notesEmptyEl.textContent = "Aucune note pour l'instant. Touche « + » pour commencer.";
+  }
 
   visible.forEach((note, index) => {
     const li = document.createElement("li");
@@ -1088,7 +1573,7 @@ function renderList() {
     li.innerHTML = `
       <input type="checkbox" class="note-select-checkbox" aria-label="Sélectionner cette note" />
       <span class="drag-handle" aria-hidden="true">⠿</span>
-      <div class="note-main">
+      <div class="note-main" role="button" tabindex="0">
         <div class="note-title">${badges}<span class="note-title-text"></span></div>
         <div class="note-preview"></div>
         <div class="note-meta">
@@ -1098,8 +1583,8 @@ function renderList() {
       <div class="note-actions">${actions}</div>
     `;
     if (note.color) li.style.backgroundColor = note.color;
-    li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", query);
-    li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, query);
+    li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", highlightTerm);
+    li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, highlightTerm);
     const dateEl = li.querySelector(".note-date");
     dateEl.textContent = timeAgo(note.updatedAt);
     const exactDate = new Date(note.updatedAt).toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" });
@@ -1110,6 +1595,15 @@ function renderList() {
     });
     dateEl.addEventListener("touchend", () => clearTimeout(longPressTimer));
     dateEl.addEventListener("touchmove", () => clearTimeout(longPressTimer));
+    if (!note.locked) {
+      const progress = checklistProgress(note.id, note.html);
+      if (progress.total) {
+        const chip = document.createElement("span");
+        chip.className = "note-reminder-chip checklist-progress-chip";
+        chip.innerHTML = `<svg class="icon"><use href="#icon-checklist"/></svg> ${progress.checked}/${progress.total}`;
+        li.querySelector(".note-meta").appendChild(chip);
+      }
+    }
     if (note.reminderAt && note.reminderAt > Date.now()) {
       const rem = document.createElement("span");
       rem.className = "note-reminder-chip";
@@ -1146,7 +1640,9 @@ function renderList() {
       e.stopPropagation();
       toggleSelect(note.id, li, checkbox);
     });
-    li.querySelector(".note-main").addEventListener("click", () => {
+    const noteMain = li.querySelector(".note-main");
+    noteMain.setAttribute("aria-label", note.locked ? "Note verrouillée" : note.title || "Note sans titre");
+    const openThisNote = () => {
       if (selectionMode) {
         toggleSelect(note.id, li, checkbox);
         return;
@@ -1156,6 +1652,13 @@ function renderList() {
         return;
       }
       openNote(note.id);
+    };
+    noteMain.addEventListener("click", openThisNote);
+    noteMain.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openThisNote();
+      }
     });
     li.querySelector(".note-actions").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1369,7 +1872,11 @@ function newNoteObject() {
     bioCredentialId: null,
     bioSalt: null,
     bioWrappedKey: null,
+    properties: {},
+    journalDate: null,
+    lastOpenedAt: null,
     reminderAt: null,
+    reminderRecur: null,
     expiresAt: null,
     reminderFired: false,
     history: [],
@@ -1415,9 +1922,23 @@ function updateWordCount(instant) {
   wordCountAnimFrame = requestAnimationFrame(step);
 }
 
+// Recently-opened note ids, most recent first — feeds the ⌘K palette's
+// default list (before any query is typed) so it doubles as a quick-switcher
+// between the handful of notes actually in use right now, not just an
+// alphabetical/chronological browse of the whole notebook.
+const RECENT_NOTES_KEY = "noteflow.recentNoteIds";
+function recordRecentNote(id) {
+  const list = loadPref(RECENT_NOTES_KEY, []).filter((n) => n !== id);
+  list.unshift(id);
+  savePref(RECENT_NOTES_KEY, list.slice(0, 10));
+}
+
 async function openNote(id) {
   currentNote = notes.find((n) => n.id === id);
   if (!currentNote) return;
+  recordRecentNote(id);
+  currentNote.lastOpenedAt = Date.now();
+  persistNote(currentNote);
   if (currentNote.locked) {
     showLockOverlay();
     return;
@@ -1431,10 +1952,16 @@ function parseTags(raw) {
 }
 
 function loadNoteIntoEditor() {
+  lastEditorActivityAt = Date.now();
   titleInput.value = currentNote.title || "";
   folderInput.value = currentNote.folder || "";
   tagsInput.value = (currentNote.tags || []).join(", ");
-  textEditor.innerHTML = currentNote.html || "";
+  if (!currentNote.properties) currentNote.properties = {};
+  renderProperties();
+  // Defense in depth: also sanitize right before render, in case a note
+  // already sitting in IndexedDB predates the ingestion-point sanitization
+  // (import / .noteflow / Firestore sync) added alongside this line.
+  textEditor.innerHTML = sanitizeNoteHtml(currentNote.html || "");
   refreshTransclusions();
   setPressed(pinBtn, !!currentNote.pinned);
   setLockIcon(!!currentNote.locked);
@@ -1453,7 +1980,11 @@ function loadNoteIntoEditor() {
   paperPanel.classList.add("hidden");
   findPanel.classList.add("hidden");
   reminderInput.value = currentNote.reminderAt ? toLocalDatetimeValue(currentNote.reminderAt) : "";
+  reminderRecurSelect.value = currentNote.reminderRecur || "";
   editorScreen.classList.remove("focus-mode");
+  editorScreen.classList.remove("reading-mode");
+  textEditor.contentEditable = "true";
+  document.getElementById("reading-progress").classList.add("hidden");
   stopAmbientFocusSound();
   notePage.style.backgroundColor = currentNote.color || "";
   notePage.dataset.paper = currentNote.paperStyle || "blank";
@@ -1587,8 +2118,9 @@ const TASK_PATTERNS = [
 
 document.getElementById("extract-tasks-btn").addEventListener("click", () => {
   const text = textEditor.textContent || "";
-  const sentences = text
-    .split(/(?<=[.!?\n])\s+/)
+  // No lookbehind here: it breaks script parsing (the whole file fails to
+  // load, not just this line) on Safari < 16.4 / iOS <= 16.3.
+  const sentences = (text.match(/[^.!?\n]+[.!?\n]*/g) || [])
     .map((s) => s.trim())
     .filter(Boolean);
   const found = [];
@@ -1621,6 +2153,52 @@ document.getElementById("extract-tasks-btn").addEventListener("click", () => {
   showToast(`${found.length} tâche${found.length > 1 ? "s" : ""} extraite${found.length > 1 ? "s" : ""}`);
 });
 
+// Moves every unchecked checklist item out of this note and into a new
+// "Tâches reportées" note (checked items and everything else stay put) —
+// the natural cleanup step after a to-do list accumulates carried-over
+// items across several editing sessions.
+document.getElementById("carry-over-tasks-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour reporter ses tâches");
+    return;
+  }
+  const uncheckedItems = Array.from(textEditor.querySelectorAll(".checklist-item")).filter(
+    (li) => !li.querySelector("input[type=checkbox]").hasAttribute("checked")
+  );
+  if (!uncheckedItems.length) {
+    showToast("Aucune tâche non cochée à reporter");
+    return;
+  }
+  const tasks = uncheckedItems.map((li) => li.querySelector("span").textContent.replace(/​/g, "").trim()).filter(Boolean);
+  const emptiedLists = new Set();
+  uncheckedItems.forEach((li) => {
+    const parentUl = li.parentElement;
+    li.remove();
+    if (parentUl && parentUl.tagName === "UL" && !parentUl.children.length) emptiedLists.add(parentUl);
+  });
+  emptiedLists.forEach((ul) => ul.remove());
+
+  const target = newNoteObject();
+  target.title = `Tâches reportées — ${currentNote.title || "Sans titre"}`;
+  const ul = document.createElement("ul");
+  ul.className = "checklist";
+  tasks.forEach((task) => {
+    const li = makeChecklistLi();
+    li.querySelector("span").textContent = task;
+    ul.appendChild(li);
+  });
+  target.html = ul.outerHTML;
+  notes.unshift(target);
+  await persistNote(target);
+
+  scheduleSave();
+  updateWordCount();
+  showToast(`${tasks.length} tâche${tasks.length > 1 ? "s" : ""} reportée${tasks.length > 1 ? "s" : ""} vers une nouvelle note`, () => goToNote(target.id), {
+    actionLabel: "Ouvrir",
+    ctrlZ: false,
+  });
+});
+
 // --- Share / export a single note ---
 document.getElementById("share-note-btn").addEventListener("click", async () => {
   const title = titleInput.value.trim() || "Note NoteFlow";
@@ -1648,16 +2226,209 @@ async function noteForExport(note) {
   return note;
 }
 
+// Strips characters that are illegal (or awkward) in a filename on
+// Windows/macOS/Linux, but — unlike a \w-based allow-list — keeps accented
+// letters intact, since "Réunion d'été" turning into "Runion dt" in a
+// French-first app is its own small bug.
+function safeFilename(name) {
+  return name.replace(/[\\/:*?"<>|]+/g, "").trim();
+}
+
+// --- Markdown export/import: real portability out of the notebook, instead
+// of only a JSON format nothing else reads. Not full CommonMark — a
+// pragmatic subset (headings, bold/italic, lists, checklists, links, code
+// fences, blockquotes) that round-trips NoteFlow's own export cleanly and
+// reads plain external Markdown reasonably. ---
+function yamlEscape(value) {
+  return /[:#"'\n]/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+}
+
+function htmlToMarkdown(html) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const lines = [];
+
+  function inline(node) {
+    let out = "";
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === 3) {
+        out += child.textContent;
+      } else if (child.tagName === "B" || child.tagName === "STRONG") {
+        out += `**${inline(child)}**`;
+      } else if (child.tagName === "I" || child.tagName === "EM") {
+        out += `*${inline(child)}*`;
+      } else if (child.tagName === "S" || child.tagName === "STRIKE") {
+        out += `~~${inline(child)}~~`;
+      } else if (child.tagName === "A") {
+        out += `[${inline(child)}](${child.getAttribute("href") || ""})`;
+      } else if (child.tagName === "BR") {
+        out += "\n";
+      } else {
+        out += inline(child);
+      }
+    });
+    return out;
+  }
+
+  // childNodes, not children: the very first line of a fresh note can be a
+  // bare top-level text node (no <p> wrapper yet, before any block-level
+  // command runs) — .children alone silently drops it, same quirk the note
+  // splitter works around elsewhere in this file.
+  Array.from(container.childNodes).forEach((el) => {
+    if (el.nodeType === 3) {
+      const text = el.textContent.trim();
+      if (text) lines.push(text, "");
+      return;
+    }
+    if (/^H[1-3]$/.test(el.tagName)) {
+      lines.push(`${"#".repeat(Number(el.tagName[1]))} ${inline(el).trim()}`, "");
+    } else if (el.tagName === "BLOCKQUOTE") {
+      lines.push(`> ${inline(el).trim()}`, "");
+    } else if (el.tagName === "PRE") {
+      const code = el.querySelector("code");
+      lines.push("```", (code ? code.textContent : el.textContent).replace(/​/g, ""), "```", "");
+    } else if (el.tagName === "UL" && el.classList.contains("checklist")) {
+      Array.from(el.children).forEach((li) => {
+        const checked = li.querySelector("input[type=checkbox]")?.hasAttribute("checked");
+        const text = (li.querySelector("span")?.textContent || "").replace(/​/g, "").trim();
+        lines.push(`- [${checked ? "x" : " "}] ${text}`);
+      });
+      lines.push("");
+    } else if (el.tagName === "UL") {
+      Array.from(el.children).forEach((li) => lines.push(`- ${inline(li).trim()}`));
+      lines.push("");
+    } else if (el.tagName === "OL") {
+      Array.from(el.children).forEach((li, i) => lines.push(`${i + 1}. ${inline(li).trim()}`));
+      lines.push("");
+    } else if (el.tagName === "TABLE") {
+      const rows = Array.from(el.rows).map((r) => Array.from(r.cells).map((c) => inline(c).trim()));
+      if (rows.length) {
+        lines.push(`| ${rows[0].join(" | ")} |`);
+        lines.push(`| ${rows[0].map(() => "---").join(" | ")} |`);
+        rows.slice(1).forEach((r) => lines.push(`| ${r.join(" | ")} |`));
+        lines.push("");
+      }
+    } else if (el.classList.contains("note-callout")) {
+      lines.push(`> **${el.classList.contains("note-callout-warning") ? "⚠️" : "ℹ️"}** ${inline(el).trim()}`, "");
+    } else if (el.tagName === "DIV" && !el.classList.contains("transclusion")) {
+      lines.push(inline(el).trim(), "");
+    } else {
+      lines.push(inline(el).trim(), "");
+    }
+  });
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function markdownToHtml(md) {
+  const lines = md.split(/\r?\n/);
+  const html = [];
+  let i = 0;
+  function inline(text) {
+    return escapeHtml(text)
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/~~(.+?)~~/g, "<s>$1</s>")
+      .replace(/(?:^|[^*])\*([^*]+?)\*(?!\*)/g, (m, g1) => m[0] + `<i>${g1}</i>`)
+      .replace(/\[([^\]]*)\]\(([^)]*)\)/g, '<a href="$2">$1</a>');
+  }
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^```/.test(line)) {
+      const code = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
+      i++;
+      html.push(`<pre class="note-code"><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+    } else if (/^#{1,3}\s+/.test(line)) {
+      const level = line.match(/^#+/)[0].length;
+      html.push(`<h${level}>${inline(line.replace(/^#+\s+/, ""))}</h${level}>`);
+      i++;
+    } else if (/^>\s?/.test(line)) {
+      html.push(`<blockquote>${inline(line.replace(/^>\s?/, ""))}</blockquote>`);
+      i++;
+    } else if (/^-\s+\[[ xX]\]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^-\s+\[[ xX]\]\s+/.test(lines[i])) {
+        const checked = /\[[xX]\]/.test(lines[i]);
+        const text = lines[i].replace(/^-\s+\[[ xX]\]\s+/, "");
+        items.push(`<li class="checklist-item"><input type="checkbox"${checked ? ' checked=""' : ""}><span>${inline(text)}</span></li>`);
+        i++;
+      }
+      html.push(`<ul class="checklist">${items.join("")}</ul>`);
+    } else if (/^[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^[-*]\s+/, ""))}</li>`);
+        i++;
+      }
+      html.push(`<ul>${items.join("")}</ul>`);
+    } else if (/^\d+\.\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+        items.push(`<li>${inline(lines[i].replace(/^\d+\.\s+/, ""))}</li>`);
+        i++;
+      }
+      html.push(`<ol>${items.join("")}</ol>`);
+    } else if (line.trim() === "") {
+      i++;
+    } else {
+      html.push(`<p>${inline(line)}</p>`);
+      i++;
+    }
+  }
+  return html.join("");
+}
+
+function parseFrontMatter(text) {
+  const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) return { meta: {}, body: text };
+  const meta = {};
+  match[1].split("\n").forEach((line) => {
+    const sep = line.indexOf(":");
+    if (sep === -1) return;
+    const key = line.slice(0, sep).trim();
+    let value = line.slice(sep + 1).trim();
+    if (/^\[.*\]$/.test(value)) {
+      meta[key] = value
+        .slice(1, -1)
+        .split(",")
+        .map((v) => v.trim().replace(/^"|"$/g, ""))
+        .filter(Boolean);
+    } else {
+      meta[key] = value.replace(/^"|"$/g, "");
+    }
+  });
+  return { meta, body: match[2] };
+}
+
+function exportNoteAsMarkdown(note) {
+  const front = [
+    "---",
+    `title: ${yamlEscape(note.title || "Sans titre")}`,
+    note.folder ? `folder: ${yamlEscape(note.folder)}` : null,
+    note.tags && note.tags.length ? `tags: [${note.tags.map(yamlEscape).join(", ")}]` : null,
+    `created: ${new Date(note.createdAt).toISOString()}`,
+    `updated: ${new Date(note.updatedAt).toISOString()}`,
+    "---",
+    "",
+  ].filter((l) => l !== null);
+  return front.join("\n") + htmlToMarkdown(note.html);
+}
+
+function importMarkdown(text) {
+  const { meta, body } = parseFrontMatter(text);
+  const note = newNoteObject();
+  note.title = meta.title || "Note importée";
+  note.folder = meta.folder || "";
+  note.tags = Array.isArray(meta.tags) ? meta.tags : meta.tags ? [meta.tags] : [];
+  note.html = sanitizeNoteHtml(markdownToHtml(body));
+  return note;
+}
+
 document.getElementById("export-note-btn").addEventListener("click", async () => {
   await flushSave(true);
   const exportNote = await noteForExport(currentNote);
   const blob = new Blob([JSON.stringify(exportNote, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${(exportNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${safeFilename(exportNote.title || "note") || "note"}.json`);
 });
 
 // A single self-contained HTML file (inline CSS, no external requests) —
@@ -1712,13 +2483,20 @@ document.getElementById("export-webpage-btn").addEventListener("click", async ()
 </body>
 </html>`;
   const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${(currentNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.html`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${safeFilename(currentNote.title || "note") || "note"}.html`);
   showToast("Page web exportée");
+});
+
+document.getElementById("export-markdown-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour l'exporter");
+    return;
+  }
+  await flushSave(true);
+  const md = exportNoteAsMarkdown(currentNote);
+  const blob = new Blob([md], { type: "text/markdown" });
+  downloadBlob(blob, `${safeFilename(currentNote.title || "note") || "note"}.md`);
+  showToast("Note exportée en Markdown");
 });
 
 // A password-encrypted, self-contained .noteflow file — the honest
@@ -1740,12 +2518,7 @@ document.getElementById("share-encrypted-btn").addEventListener("click", async (
   const enc = await encryptString(key, payload);
   const packet = { format: "noteflow-encrypted-v1", salt: bytesToB64(salt), enc };
   const blob = new Blob([JSON.stringify(packet, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${(currentNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.noteflow`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${safeFilename(currentNote.title || "note") || "note"}.noteflow`);
   showToast("Fichier chiffré exporté");
 });
 
@@ -1757,7 +2530,7 @@ async function importEncryptedPacket(packet) {
     const payload = JSON.parse(await decryptString(key, packet.enc));
     const note = newNoteObject();
     note.title = payload.title || "Note importée";
-    note.html = payload.html || "";
+    note.html = sanitizeNoteHtml(payload.html || "");
     note.drawing = payload.drawing || null;
     notes.unshift(note);
     await persistNote(note);
@@ -1779,8 +2552,12 @@ newNoteBtn.addEventListener("click", async () => {
   titleInput.focus();
 });
 
-backBtn.addEventListener("click", () => {
-  flushSave(true);
+backBtn.addEventListener("click", async () => {
+  // Must await: showList() clears a locked note's plaintext from memory,
+  // and flushSave's persistNote() briefly restores that same plaintext
+  // (to encrypt-then-restore) after its own await — if showList() ran
+  // first, that restore would race back in right after the purge.
+  await flushSave(true);
   showList();
 });
 
@@ -1904,18 +2681,30 @@ function scheduleSave() {
 function stripImagesForHistory(html) {
   const div = document.createElement("div");
   div.innerHTML = html || "";
-  div.querySelectorAll("img").forEach((img) => img.remove());
+  div.querySelectorAll("img, audio, source").forEach((el) => el.remove());
   return div.innerHTML;
 }
 
 function pushHistorySnapshot() {
   if (!currentNote.history) currentNote.history = [];
   currentNote.history.push({ title: currentNote.title, html: stripImagesForHistory(currentNote.html), ts: Date.now() });
-  if (currentNote.history.length > 20) currentNote.history.shift();
+  // Pinned milestones ("avant refonte") are exempt from the rolling 20-slot
+  // cap: find the oldest *unpinned* entry to drop instead of always
+  // dropping index 0, which would silently delete a milestone the user
+  // explicitly asked to keep.
+  if (currentNote.history.length > 20) {
+    const dropIndex = currentNote.history.findIndex((s) => !s.pinned);
+    if (dropIndex !== -1) currentNote.history.splice(dropIndex, 1);
+  }
 }
 
 async function flushSave(immediate) {
   if (!currentNote) return;
+  // Scoped here rather than inside persistNote(): persistNote is also
+  // called by background machinery (the reminder/ephemeral-expiry interval,
+  // Firestore sync) that isn't the user actually writing — counting those
+  // toward the streak meant a day with zero typing could still "extend" it.
+  recordActivityToday();
   clearTimeout(saveTimer);
   const newTitle = titleInput.value.trim();
   const newHtml = textEditor.innerHTML;
@@ -1943,12 +2732,138 @@ async function flushSave(immediate) {
   }
 }
 
+// Flush the pending 500ms autosave debounce when the app is about to lose
+// the CPU entirely (tab closed, backgrounded, or an iOS PWA swiped away) —
+// without this, the last half-second of typing before any of those was
+// silently lost. "visibilitychange" fires reliably in all of these cases
+// (unlike "beforeunload", which iOS Safari/PWA doesn't fire); "pagehide" is
+// kept as a second signal for browsers that skip visibilitychange on close.
+function flushOnLeave() {
+  if (document.visibilityState === "hidden" && editorScreen.classList.contains("active") && currentNote) {
+    flushSave(true);
+  }
+}
+document.addEventListener("visibilitychange", flushOnLeave);
+window.addEventListener("pagehide", flushOnLeave);
+
+// --- Auto-relock: a locked note left open and unattended stayed decrypted
+// in memory indefinitely — until the user manually navigated back to the
+// list — even if the tab sat in the background or idle for hours. Backing
+// the app or a couple of minutes without typing now re-locks it. ---
+const AUTO_RELOCK_IDLE_MS = 2 * 60 * 1000;
+let lastEditorActivityAt = Date.now();
+["input", "keydown", "mousedown", "touchstart"].forEach((evt) => {
+  textEditor.addEventListener(evt, () => {
+    lastEditorActivityAt = Date.now();
+  });
+});
+
+async function relockIfUnattended() {
+  if (!currentNote || !currentNote.locked || !activeUnlockKey || activeUnlockKey.noteId !== currentNote.id) return;
+  if (!editorScreen.classList.contains("active")) return;
+  await flushSave(true);
+  showList();
+  showToast("Note reverrouillée automatiquement");
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") relockIfUnattended();
+});
+
+setInterval(() => {
+  if (Date.now() - lastEditorActivityAt > AUTO_RELOCK_IDLE_MS) relockIfUnattended();
+}, 30000);
+
 titleInput.addEventListener("input", scheduleSave);
 folderInput.addEventListener("change", scheduleSave);
 tagsInput.addEventListener("change", scheduleSave);
+
+// --- Structured properties: key/value pairs stored on the note object
+// itself (note.properties), not in the HTML body — so they stay comparable
+// and filterable (prop:clé:valeur in search) instead of being just more
+// unstructured text in the note. ---
+const propertiesChipsEl = document.getElementById("properties-chips");
+const propertiesInput = document.getElementById("properties-input");
+
+function renderProperties() {
+  propertiesChipsEl.innerHTML = "";
+  const props = currentNote.properties || {};
+  Object.keys(props).forEach((key) => {
+    const chip = document.createElement("span");
+    chip.className = "property-chip";
+    const label = document.createElement("span");
+    label.textContent = `${key}: ${props[key]}`;
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.textContent = "✕";
+    removeBtn.setAttribute("aria-label", `Retirer la propriété ${key}`);
+    removeBtn.addEventListener("click", () => {
+      delete currentNote.properties[key];
+      renderProperties();
+      scheduleSave();
+    });
+    chip.appendChild(label);
+    chip.appendChild(removeBtn);
+    propertiesChipsEl.appendChild(chip);
+  });
+}
+
+propertiesInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const raw = propertiesInput.value.trim();
+  if (!raw) return;
+  const sep = raw.indexOf(":");
+  if (sep === -1) {
+    showToast("Format attendu : clé: valeur");
+    return;
+  }
+  const key = raw.slice(0, sep).trim();
+  const value = raw.slice(sep + 1).trim();
+  if (!key || !value) return;
+  if (!currentNote.properties) currentNote.properties = {};
+  currentNote.properties[key] = value;
+  propertiesInput.value = "";
+  renderProperties();
+  scheduleSave();
+});
 textEditor.addEventListener("input", () => {
   scheduleSave();
   updateWordCount();
+});
+
+textEditor.addEventListener("input", (e) => {
+  if (e.data !== " " && e.inputType !== "insertParagraph" && e.inputType !== "insertLineBreak") return;
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = sel.getRangeAt(0).startOffset;
+  const before = node.textContent.slice(0, offset);
+  // Chrome's contenteditable silently turns a typed space into a non-breaking
+  // space (U+00A0) rather than U+0020 in some caret positions — a plain " "
+  // in the character class below would then never match.
+  const match = before.match(/(\S+)[  \n]$/);
+  if (!match) return;
+  const trigger = match[1];
+  const snippet = loadSnippets().find((s) => s.trigger === trigger);
+  if (!snippet) return;
+  const cursorMarker = "$|";
+  const cursorIndex = snippet.expansion.indexOf(cursorMarker);
+  const expansionText = cursorIndex === -1 ? snippet.expansion : snippet.expansion.replace(cursorMarker, "");
+  const range = document.createRange();
+  range.setStart(node, offset - match[0].length);
+  range.setEnd(node, offset);
+  range.deleteContents();
+  const textNode = document.createTextNode(expansionText + " ");
+  range.insertNode(textNode);
+  const caretPos = cursorIndex === -1 ? textNode.length : cursorIndex;
+  const newRange = document.createRange();
+  newRange.setStart(textNode, Math.min(caretPos, textNode.length));
+  newRange.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(newRange);
+  scheduleSave();
 });
 
 let lastKeystrokeTime = 0;
@@ -2045,6 +2960,29 @@ focusBtn.addEventListener("click", () => {
   }
 });
 
+// --- Reading mode: a consultation view (wider measure, taller line-height,
+// chrome hidden, reading-progress bar), distinct from focus mode which is a
+// *writing* mode (gold frame, ambient sound, editor stays fully live). ---
+const readingModeBtn = document.getElementById("reading-mode-btn");
+const readingProgressEl = document.getElementById("reading-progress");
+const readingProgressFillEl = document.getElementById("reading-progress-fill");
+
+function updateReadingProgress() {
+  if (!editorScreen.classList.contains("reading-mode")) return;
+  const scrollable = pageScrollEl.scrollHeight - pageScrollEl.clientHeight;
+  const pct = scrollable > 0 ? Math.min(100, Math.max(0, (pageScrollEl.scrollTop / scrollable) * 100)) : 100;
+  readingProgressFillEl.style.width = `${pct}%`;
+}
+
+readingModeBtn.addEventListener("click", () => {
+  const entering = editorScreen.classList.toggle("reading-mode");
+  textEditor.contentEditable = entering ? "false" : "true";
+  readingProgressEl.classList.toggle("hidden", !entering);
+  if (entering) updateReadingProgress();
+});
+
+pageScrollEl.addEventListener("scroll", updateReadingProgress);
+
 // The paper grain drifts a couple pixels against the cursor in focus mode —
 // like a sheet of paper on a desk, viewed from a slightly shifting angle.
 const reduceMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -2069,7 +3007,7 @@ const biometricSetupBtn = document.getElementById("biometric-setup-btn");
 let pendingUnlockNoteId = null;
 
 function setLockIcon(locked) {
-  lockBtn.innerHTML = `<svg class="icon"><use href="#icon-lock-${locked ? "closed" : "open"}"/></svg>`;
+  lockBtn.innerHTML = `<svg class="icon"><use href="#icon-lock-${locked ? "closed" : "open"}"/></svg>${locked ? "Retirer le verrou" : "Verrouiller"}`;
 }
 
 // --- Real encryption for locked notes (AES-GCM, key derived from the PIN via
@@ -2230,6 +3168,7 @@ let lockFailCount = 0;
 let lockLockedUntil = 0;
 
 function showLockOverlay() {
+  modalReturnFocusEl = document.activeElement;
   pendingUnlockNoteId = currentNote.id;
   lockInput.value = "";
   lockError.classList.add("hidden");
@@ -2300,6 +3239,7 @@ lockInput.addEventListener("keydown", (e) => {
 lockCancelBtn.addEventListener("click", () => {
   lockOverlay.classList.add("hidden");
   pendingUnlockNoteId = null;
+  restoreModalFocus();
   showList();
 });
 
@@ -2327,6 +3267,12 @@ lockBtn.addEventListener("click", async () => {
     textEditor.innerHTML = "";
     currentNote.html = "";
     currentNote.drawing = null;
+    // Without this, the version history array — still full of plaintext
+    // snapshots — stays in memory after locking. It's already preserved
+    // inside encBlob; leaving a second, unencrypted copy around means the
+    // next persistNote() with no active unlock key (pin from the list,
+    // archive, a reminder tick) writes it to IndexedDB/Firestore in clear.
+    currentNote.history = [];
     redrawStrokes();
     if (navigator.vibrate) navigator.vibrate(15);
     showToast("Note verrouillée et chiffrée");
@@ -2375,6 +3321,7 @@ lockBtn.addEventListener("click", async () => {
 const reminderBtn = document.getElementById("reminder-btn");
 const reminderPanel = document.getElementById("reminder-panel");
 const reminderInput = document.getElementById("reminder-input");
+const reminderRecurSelect = document.getElementById("reminder-recur-select");
 const reminderSaveBtn = document.getElementById("reminder-save-btn");
 const reminderClearBtn = document.getElementById("reminder-clear-btn");
 
@@ -2395,6 +3342,7 @@ reminderSaveBtn.addEventListener("click", () => {
     Notification.requestPermission();
   }
   currentNote.reminderAt = new Date(reminderInput.value).getTime();
+  currentNote.reminderRecur = reminderRecurSelect.value || null;
   currentNote.reminderFired = false;
   scheduleSave();
   reminderPanel.classList.add("hidden");
@@ -2403,28 +3351,101 @@ reminderSaveBtn.addEventListener("click", () => {
 
 reminderClearBtn.addEventListener("click", () => {
   currentNote.reminderAt = null;
+  currentNote.reminderRecur = null;
   currentNote.reminderFired = false;
   reminderInput.value = "";
+  reminderRecurSelect.value = "";
   scheduleSave();
   reminderPanel.classList.add("hidden");
   showToast("Rappel supprimé");
 });
 
+function nextRecurrence(ts, recur) {
+  const d = new Date(ts);
+  if (recur === "daily") d.setDate(d.getDate() + 1);
+  else if (recur === "weekly") d.setDate(d.getDate() + 7);
+  else if (recur === "monthly") d.setMonth(d.getMonth() + 1);
+  return d.getTime();
+}
+
+function snoozeReminder(noteId, minutes) {
+  const note = notes.find((n) => n.id === noteId);
+  if (!note) return;
+  note.reminderAt = Date.now() + minutes * 60000;
+  note.reminderFired = false;
+  persistNote(note);
+  if (currentNote && currentNote.id === noteId) {
+    reminderInput.value = toLocalDatetimeValue(note.reminderAt);
+  }
+  if (listScreen.classList.contains("active")) renderList();
+}
+
+navigator.serviceWorker &&
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "noteflow-snooze-reminder" && event.data.noteId) {
+      snoozeReminder(event.data.noteId, 10);
+      showToast("Rappel reporté de 10 minutes");
+    }
+  });
+
+function notifyReminder(note) {
+  const title = note.title || "Rappel NoteFlow";
+  const body = "Touche pour ouvrir ta note.";
+  if (!("Notification" in window) || Notification.permission !== "granted") {
+    showToast(`Rappel : ${note.title || "Sans titre"}`, () => snoozeReminder(note.id, 10), { actionLabel: "Dans 10 min", ctrlZ: false });
+    return;
+  }
+  // Chrome on Android (and so any Chromium-based installed PWA there) throws
+  // "Illegal constructor" on `new Notification(...)` — notifications must go
+  // through the service worker registration there. A single throw used to
+  // abort the whole forEach below, silently dropping every other reminder
+  // due that tick (each had already been marked reminderFired first).
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.ready
+      .then((reg) => reg.showNotification(title, { body, data: { noteId: note.id }, actions: [{ action: "snooze", title: "Dans 10 min" }] }))
+      .catch(() => showToast(`Rappel : ${note.title || "Sans titre"}`));
+    return;
+  }
+  try {
+    new Notification(title, { body });
+  } catch {
+    showToast(`Rappel : ${note.title || "Sans titre"}`);
+  }
+}
+
 setInterval(() => {
   const now = Date.now();
   notes.forEach((note) => {
     if (note.reminderAt && !note.reminderFired && note.reminderAt <= now) {
-      note.reminderFired = true;
-      persistNote(note);
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification(note.title || "Rappel NoteFlow", { body: "Touche pour ouvrir ta note." });
+      if (note.reminderRecur) {
+        note.reminderAt = nextRecurrence(note.reminderAt, note.reminderRecur);
       } else {
-        showToast(`Rappel : ${note.title || "Sans titre"}`);
+        note.reminderFired = true;
       }
+      persistNote(note);
+      notifyReminder(note);
       if (listScreen.classList.contains("active")) renderList();
     }
   });
 }, 30000);
+
+// A reminder due while the app was closed entirely never got a chance to
+// fire (the interval above only runs while a tab is open) — surfaced once
+// as a single recap at boot instead of scattering separate notifications
+// for however many piled up, or silently losing track of them.
+function summarizeMissedReminders() {
+  const now = Date.now();
+  const missed = notes.filter((n) => !n.deletedAt && n.reminderAt && !n.reminderFired && n.reminderAt <= now);
+  if (!missed.length) return;
+  missed.forEach((note) => {
+    if (note.reminderRecur) note.reminderAt = nextRecurrence(note.reminderAt, note.reminderRecur);
+    else note.reminderFired = true;
+    persistNote(note);
+  });
+  const names = missed.slice(0, 3).map((n) => n.title || "Sans titre").join(", ");
+  const extra = missed.length > 3 ? ` et ${missed.length - 3} autre(s)` : "";
+  showToast(`Rappel${missed.length > 1 ? "s" : ""} manqué${missed.length > 1 ? "s" : ""} : ${names}${extra}`);
+}
 
 // --- Ephemeral notes: a self-destruct timer, distinct from reminders — the
 // note quietly moves itself to the trash once the delay is up (the 30-day
@@ -2481,6 +3502,67 @@ historyBtn.addEventListener("click", () => {
   if (opening) renderHistory();
 });
 
+// Word-level diff (classic LCS backtrack) between two plain-text strings —
+// capped, since the DP table is O(n*m): a note has to be genuinely huge
+// (a few thousand words on both sides) before this becomes noticeably slow.
+const DIFF_WORD_CAP = 4000;
+function diffWords(oldText, newText) {
+  const a = oldText.split(/(\s+)/).filter((w) => w !== "");
+  const b = newText.split(/(\s+)/).filter((w) => w !== "");
+  if (a.length > DIFF_WORD_CAP || b.length > DIFF_WORD_CAP) return null;
+  const n = a.length;
+  const m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  let i = 0;
+  let j = 0;
+  const parts = [];
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      parts.push({ type: "same", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      parts.push({ type: "del", text: a[i] });
+      i++;
+    } else {
+      parts.push({ type: "ins", text: b[j] });
+      j++;
+    }
+  }
+  while (i < n) parts.push({ type: "del", text: a[i++] });
+  while (j < m) parts.push({ type: "ins", text: b[j++] });
+  return parts;
+}
+
+function renderDiffView(container, snap) {
+  const oldText = stripHtml(snap.html);
+  const newText = stripHtml(currentNote.html);
+  const parts = diffWords(oldText, newText);
+  container.innerHTML = "";
+  if (!parts) {
+    container.textContent = "Note trop volumineuse pour un aperçu détaillé.";
+    return;
+  }
+  if (!parts.some((p) => p.type !== "same")) {
+    container.textContent = "Identique au contenu actuel.";
+    return;
+  }
+  parts.forEach((p) => {
+    if (p.type === "same") {
+      container.appendChild(document.createTextNode(p.text));
+    } else {
+      const mark = document.createElement(p.type === "del" ? "del" : "ins");
+      mark.textContent = p.text;
+      container.appendChild(mark);
+    }
+  });
+}
+
 function renderHistory() {
   const history = currentNote.history || [];
   historyListEl.innerHTML = "";
@@ -2491,12 +3573,44 @@ function renderHistory() {
   [...history].reverse().forEach((snap) => {
     const li = document.createElement("li");
     li.className = "history-item";
+    const row = document.createElement("div");
+    row.className = "history-row";
     const label = document.createElement("span");
-    label.textContent = new Date(snap.ts).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Restaurer";
-    btn.addEventListener("click", () => {
+    const dateLabel = new Date(snap.ts).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    label.textContent = snap.pinned ? `📌 ${snap.label || "Jalon"} — ${dateLabel}` : dateLabel;
+    const diffBox = document.createElement("div");
+    diffBox.className = "history-diff hidden";
+    const compareBtn = document.createElement("button");
+    compareBtn.type = "button";
+    compareBtn.className = "link-btn";
+    compareBtn.textContent = "Comparer";
+    compareBtn.addEventListener("click", () => {
+      const hidden = diffBox.classList.contains("hidden");
+      if (hidden) renderDiffView(diffBox, snap);
+      diffBox.classList.toggle("hidden");
+      compareBtn.textContent = hidden ? "Masquer" : "Comparer";
+    });
+    const pinBtn = document.createElement("button");
+    pinBtn.type = "button";
+    pinBtn.className = "link-btn";
+    pinBtn.textContent = snap.pinned ? "Détacher" : "Épingler";
+    pinBtn.addEventListener("click", () => {
+      if (snap.pinned) {
+        snap.pinned = false;
+        snap.label = null;
+      } else {
+        const name = window.prompt("Nom de ce jalon :", "Jalon");
+        if (!name) return;
+        snap.pinned = true;
+        snap.label = name.trim();
+      }
+      scheduleSave();
+      renderHistory();
+    });
+    const restoreBtn = document.createElement("button");
+    restoreBtn.type = "button";
+    restoreBtn.textContent = "Restaurer";
+    restoreBtn.addEventListener("click", () => {
       pushHistorySnapshot();
       currentNote.title = snap.title;
       currentNote.html = snap.html;
@@ -2507,8 +3621,12 @@ function renderHistory() {
       historyPanel.classList.add("hidden");
       showToast("Version restaurée");
     });
-    li.appendChild(label);
-    li.appendChild(btn);
+    row.appendChild(label);
+    row.appendChild(compareBtn);
+    row.appendChild(pinBtn);
+    row.appendChild(restoreBtn);
+    li.appendChild(row);
+    li.appendChild(diffBox);
     historyListEl.appendChild(li);
   });
 }
@@ -2521,35 +3639,248 @@ const backlinksListEl = document.getElementById("backlinks-list");
 backlinksBtn.addEventListener("click", () => {
   reminderPanel.classList.add("hidden");
   historyPanel.classList.add("hidden");
+  outlinePanel.classList.add("hidden");
   const opening = backlinksPanel.classList.contains("hidden");
   backlinksPanel.classList.toggle("hidden");
   if (opening) renderBacklinks();
 });
 
-function renderBacklinks() {
-  const needle = `data-note-id="${currentNote.id}"`;
-  const linking = notes.filter((n) => !n.deletedAt && n.id !== currentNote.id && !n.locked && (n.html || "").includes(needle));
-  backlinksListEl.innerHTML = "";
-  if (!linking.length) {
-    backlinksListEl.innerHTML = '<li class="history-empty">Aucune note ne pointe encore ici.</li>';
+// --- Outline: a live table of contents from the note's own H1/H2/H3, click
+// to jump to a heading, ▾/▸ to fold/unfold everything until the next
+// heading of the same or higher level (a lightweight section collapse,
+// without needing to wrap the editor's content in section containers). ---
+const outlineBtn = document.getElementById("outline-btn");
+const outlinePanel = document.getElementById("outline-panel");
+const outlineListEl = document.getElementById("outline-list");
+
+function headingLevel(el) {
+  return el.tagName === "H1" ? 1 : el.tagName === "H2" ? 2 : 3;
+}
+
+function isHeadingCollapsed(heading) {
+  const next = heading.nextElementSibling;
+  return !!(next && next.classList.contains("outline-collapsed"));
+}
+
+function toggleHeadingCollapse(heading) {
+  const level = headingLevel(heading);
+  const collapsing = !isHeadingCollapsed(heading);
+  let el = heading.nextElementSibling;
+  while (el && !(/^H[1-3]$/.test(el.tagName) && headingLevel(el) <= level)) {
+    el.classList.toggle("outline-collapsed", collapsing);
+    el = el.nextElementSibling;
+  }
+}
+
+function renderOutline() {
+  const headings = Array.from(textEditor.querySelectorAll("h1, h2, h3"));
+  outlineListEl.innerHTML = "";
+  if (!headings.length) {
+    outlineListEl.innerHTML = '<li class="history-empty">Aucun titre (H1/H2/H3) dans cette note.</li>';
     return;
   }
-  linking.forEach((n) => {
+  headings.forEach((heading, i) => {
+    if (!heading.id) heading.id = `outline-heading-${i}-${Date.now()}`;
+    const level = headingLevel(heading);
+    const li = document.createElement("li");
+    li.className = "history-item outline-item";
+    li.style.marginLeft = `${(level - 1) * 14}px`;
+    const foldBtn = document.createElement("button");
+    foldBtn.type = "button";
+    foldBtn.className = "link-btn outline-fold-btn";
+    foldBtn.textContent = isHeadingCollapsed(heading) ? "▸" : "▾";
+    foldBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleHeadingCollapse(heading);
+      foldBtn.textContent = isHeadingCollapsed(heading) ? "▸" : "▾";
+      scheduleSave();
+    });
+    const label = document.createElement("span");
+    label.textContent = heading.textContent.trim() || "(sans titre)";
+    label.addEventListener("click", () => {
+      outlinePanel.classList.add("hidden");
+      heading.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    li.appendChild(foldBtn);
+    li.appendChild(label);
+    outlineListEl.appendChild(li);
+  });
+}
+
+// --- Split view: a read-only reference pane showing a second note beside
+// the one being edited — mono-user, entirely local, for copying from or
+// checking a source while writing, without leaving the editor. Read-only on
+// purpose: two live contenteditable regions autosaving independently would
+// multiply every edge case (history snapshots, wikilink autocomplete, drawing
+// canvas sizing…) for a "peek at another note" feature that doesn't need it. ---
+const splitViewBtn = document.getElementById("split-view-btn");
+const splitViewPane = document.getElementById("split-view-pane");
+const splitViewSearch = document.getElementById("split-view-search");
+const splitViewResults = document.getElementById("split-view-results");
+const splitViewContent = document.getElementById("split-view-content");
+let splitViewNoteId = null;
+
+function renderSplitViewContent() {
+  const note = notes.find((n) => n.id === splitViewNoteId && !n.deletedAt);
+  if (!note) {
+    splitViewContent.innerHTML = '<p class="split-view-empty">Choisis une note ci-dessus.</p>';
+    return;
+  }
+  if (note.locked) {
+    splitViewContent.innerHTML = '<p class="split-view-empty">Cette note est verrouillée.</p>';
+    return;
+  }
+  splitViewContent.innerHTML = `<p><strong>${escapeHtml(note.title || "Sans titre")}</strong></p>` + (sanitizeNoteHtml(note.html) || "");
+}
+
+function openInSplitView(noteId) {
+  splitViewNoteId = noteId;
+  splitViewPane.classList.remove("hidden");
+  splitViewResults.classList.add("hidden");
+  splitViewSearch.value = "";
+  renderSplitViewContent();
+}
+
+splitViewSearch.addEventListener("input", () => {
+  const q = splitViewSearch.value.trim().toLowerCase();
+  if (!q) {
+    splitViewResults.classList.add("hidden");
+    return;
+  }
+  const matches = notes
+    .filter((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "sans titre").toLowerCase().includes(q))
+    .slice(0, 8);
+  splitViewResults.innerHTML = "";
+  matches.forEach((n) => {
+    const li = document.createElement("li");
+    li.className = "cmdk-item";
+    li.innerHTML = `<span class="cmdk-item-label"></span>`;
+    li.querySelector(".cmdk-item-label").textContent = n.locked ? "🔒 " + (n.title || "Sans titre") : n.title || "Sans titre";
+    li.addEventListener("click", () => openInSplitView(n.id));
+    splitViewResults.appendChild(li);
+  });
+  splitViewResults.classList.toggle("hidden", !matches.length);
+});
+
+document.getElementById("split-view-close").addEventListener("click", () => {
+  splitViewPane.classList.add("hidden");
+  splitViewNoteId = null;
+});
+
+splitViewBtn.addEventListener("click", () => {
+  const opening = splitViewPane.classList.contains("hidden");
+  if (opening) {
+    splitViewPane.classList.remove("hidden");
+    renderSplitViewContent();
+    setTimeout(() => splitViewSearch.focus(), 30);
+  } else {
+    splitViewPane.classList.add("hidden");
+  }
+});
+
+outlineBtn.addEventListener("click", () => {
+  reminderPanel.classList.add("hidden");
+  historyPanel.classList.add("hidden");
+  backlinksPanel.classList.add("hidden");
+  const opening = outlinePanel.classList.contains("hidden");
+  outlinePanel.classList.toggle("hidden");
+  if (opening) renderOutline();
+});
+
+// The surrounding paragraph/line of a link, not the whole note body — a
+// quick sense of *why* another note points here, without opening it.
+function extractLinkContext(html, noteId) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const el = container.querySelector(`[data-note-id="${CSS.escape(noteId)}"]`);
+  if (!el) return "";
+  const block = el.closest("p, li, div, h1, h2, h3") || el.parentElement || container;
+  const text = block.textContent.trim();
+  return text.length > 140 ? text.slice(0, 140) + "…" : text;
+}
+
+function extractOutgoingRefs(html) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const refs = [];
+  container.querySelectorAll("a.wikilink[data-note-id]").forEach((a) => refs.push({ id: a.dataset.noteId, kind: "link" }));
+  container.querySelectorAll(".transclusion[data-note-id]").forEach((d) => refs.push({ id: d.dataset.noteId, kind: "transclusion" }));
+  return refs;
+}
+
+function addBacklinksSection(title, entries, emptyText) {
+  const header = document.createElement("li");
+  header.className = "backlinks-section-header";
+  header.textContent = title;
+  backlinksListEl.appendChild(header);
+  if (!entries.length) {
+    const li = document.createElement("li");
+    li.className = "history-empty";
+    li.textContent = emptyText;
+    backlinksListEl.appendChild(li);
+    return;
+  }
+  entries.forEach(({ label, sub, targetId, broken }) => {
     const li = document.createElement("li");
     li.className = "history-item";
-    const label = document.createElement("span");
-    label.textContent = n.title || "Sans titre";
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Ouvrir";
-    btn.addEventListener("click", () => {
-      backlinksPanel.classList.add("hidden");
-      goToNote(n.id);
-    });
-    li.appendChild(label);
-    li.appendChild(btn);
+    const textWrap = document.createElement("div");
+    textWrap.className = "backlink-text";
+    const labelEl = document.createElement("span");
+    labelEl.textContent = broken ? `${label} (lien brisé)` : label;
+    textWrap.appendChild(labelEl);
+    if (sub) {
+      const subEl = document.createElement("span");
+      subEl.className = "backlink-extract";
+      subEl.textContent = sub;
+      textWrap.appendChild(subEl);
+    }
+    li.appendChild(textWrap);
+    if (!broken) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Ouvrir";
+      btn.addEventListener("click", () => {
+        backlinksPanel.classList.add("hidden");
+        goToNote(targetId);
+      });
+      li.appendChild(btn);
+    }
     backlinksListEl.appendChild(li);
   });
+}
+
+function renderBacklinks() {
+  backlinksListEl.innerHTML = "";
+  const needle = `data-note-id="${currentNote.id}"`;
+  const incoming = notes
+    .filter((n) => !n.deletedAt && n.id !== currentNote.id && (n.html || "").includes(needle))
+    .map((n) => ({
+      label: n.locked ? "🔒 " + (n.title || "Sans titre") : n.title || "Sans titre",
+      sub: n.locked ? "" : extractLinkContext(n.html, currentNote.id),
+      targetId: n.id,
+    }));
+
+  const outgoingRefs = extractOutgoingRefs(currentNote.html);
+  const outgoingLinks = outgoingRefs
+    .filter((r) => r.kind === "link")
+    .map((r) => {
+      const target = notes.find((n) => n.id === r.id && !n.deletedAt);
+      return target
+        ? { label: target.locked ? "🔒 " + (target.title || "Sans titre") : target.title || "Sans titre", targetId: target.id }
+        : { label: "Note supprimée", broken: true };
+    });
+  const transclusions = outgoingRefs
+    .filter((r) => r.kind === "transclusion")
+    .map((r) => {
+      const target = notes.find((n) => n.id === r.id && !n.deletedAt);
+      return target
+        ? { label: target.locked ? "🔒 " + (target.title || "Sans titre") : target.title || "Sans titre", targetId: target.id }
+        : { label: "Note supprimée", broken: true };
+    });
+
+  addBacklinksSection("Liens entrants", incoming, "Aucune note ne pointe encore ici.");
+  addBacklinksSection("Liens sortants", outgoingLinks, "Cette note ne pointe vers aucune autre.");
+  addBacklinksSection("Transclusions", transclusions, "Aucune transclusion dans cette note.");
 }
 
 // --- Markdown-style shortcuts while typing ---
@@ -2720,7 +4051,97 @@ textEditor.addEventListener("input", () => {
   sel.addRange(r);
 });
 
-// --- Wikilinks: typing [[Titre]] turns into a clickable link to that note ---
+// --- Wikilinks: typing [[Titre]] turns into a clickable link to that note.
+// A live popup also opens right after "[[" and filters as you type, with
+// arrow keys + Enter to pick — including a "Créer la note…" entry when
+// nothing matches, instead of silently doing nothing until you finish
+// typing an exact, pre-existing title. ---
+const wikilinkAutocompleteEl = document.getElementById("wikilink-autocomplete");
+let wikilinkAcItems = [];
+let wikilinkAcIndex = 0;
+let wikilinkAcRange = null; // { node, start, end } spanning "[[query" (no closing "]]")
+
+function closeWikilinkAutocomplete() {
+  wikilinkAutocompleteEl.classList.add("hidden");
+  wikilinkAcItems = [];
+  wikilinkAcRange = null;
+}
+
+function insertWikilinkAt(node, start, end, target) {
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  range.deleteContents();
+  const a = document.createElement("a");
+  a.href = "#";
+  a.className = "wikilink";
+  a.dataset.noteId = target.id;
+  a.textContent = target.title || "Sans titre";
+  range.insertNode(a);
+  const spacer = document.createTextNode("​");
+  a.parentNode.insertBefore(spacer, a.nextSibling);
+  const sel = window.getSelection();
+  range.setStart(spacer, 1);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  scheduleSave();
+}
+
+async function chooseWikilinkAutocomplete(index) {
+  if (!wikilinkAcRange || !wikilinkAcItems[index]) return;
+  const { node, start, end } = wikilinkAcRange;
+  const item = wikilinkAcItems[index];
+  let target = item.note;
+  if (item.create) {
+    target = newNoteObject();
+    target.title = item.title;
+    notes.push(target);
+    await persistNote(target);
+  }
+  closeWikilinkAutocomplete();
+  insertWikilinkAt(node, start, end, target);
+}
+
+function renderWikilinkAutocomplete(node, start, query) {
+  const q = query.trim().toLowerCase();
+  const matches = notes
+    .filter((n) => !n.deletedAt && n.id !== currentNote.id)
+    .filter((n) => !q || (n.title || "").toLowerCase().includes(q))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 6)
+    .map((n) => ({ note: n, label: n.title || "Sans titre" }));
+  wikilinkAcItems = matches;
+  const hasExact = matches.some((m) => (m.note.title || "").toLowerCase() === q);
+  if (q && !hasExact) wikilinkAcItems = [...matches, { create: true, title: query.trim(), label: `Créer la note « ${query.trim()} »` }];
+  if (!wikilinkAcItems.length) {
+    closeWikilinkAutocomplete();
+    return;
+  }
+  wikilinkAcIndex = 0;
+  wikilinkAcRange = { node, start, end: start + 2 + query.length };
+  wikilinkAutocompleteEl.innerHTML = "";
+  wikilinkAcItems.forEach((item, i) => {
+    const li = document.createElement("li");
+    li.className = "wikilink-autocomplete-item" + (item.create ? " create" : "") + (i === 0 ? " active" : "");
+    li.setAttribute("role", "option");
+    li.textContent = item.label;
+    li.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      chooseWikilinkAutocomplete(i);
+    });
+    wikilinkAutocompleteEl.appendChild(li);
+  });
+  wikilinkAutocompleteEl.classList.remove("hidden");
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.collapse(true);
+  const rect = range.getBoundingClientRect();
+  const pageRect = notePage.getBoundingClientRect();
+  wikilinkAutocompleteEl.style.left = `${rect.left - pageRect.left}px`;
+  wikilinkAutocompleteEl.style.top = `${rect.bottom - pageRect.top + 4}px`;
+}
+
 textEditor.addEventListener("input", () => {
   const sel = window.getSelection();
   if (!sel.rangeCount || !sel.isCollapsed) return;
@@ -2728,38 +4149,45 @@ textEditor.addEventListener("input", () => {
   if (node.nodeType !== 3) return;
   const offset = sel.getRangeAt(0).startOffset;
   const text = node.textContent.slice(0, offset);
-  const match = text.match(/\[\[([^[\]]+)\]\]$/);
-  if (!match) return;
-  // A leading "!" (![[Titre]]) is transclusion, handled by a separate
-  // listener below — this one only handles a plain wikilink.
-  if (text[text.length - match[0].length - 1] === "!") return;
-  const query = match[1].trim().toLowerCase();
-  if (!query) return;
-  const target =
-    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
-    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
-  if (!target) return;
-  const full = match[0];
-  const range = document.createRange();
-  try {
-    range.setStart(node, offset - full.length);
-    range.setEnd(node, offset);
-    range.deleteContents();
-    const a = document.createElement("a");
-    a.href = "#";
-    a.className = "wikilink";
-    a.dataset.noteId = target.id;
-    a.textContent = target.title || "Sans titre";
-    range.insertNode(a);
-    const spacer = document.createTextNode("​");
-    a.parentNode.insertBefore(spacer, a.nextSibling);
-    range.setStart(spacer, 1);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    scheduleSave();
-  } catch {
-    /* selection edge case: skip silently */
+
+  const closedMatch = text.match(/\[\[([^[\]]+)\]\]$/);
+  if (closedMatch && text[text.length - closedMatch[0].length - 1] !== "!") {
+    closeWikilinkAutocomplete();
+    const query = closedMatch[1].trim().toLowerCase();
+    if (!query) return;
+    const target =
+      notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+      notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+    if (!target) return;
+    insertWikilinkAt(node, offset - closedMatch[0].length, offset, target);
+    return;
+  }
+
+  const openMatch = text.match(/(?:^|[^!])\[\[([^[\]]*)$/);
+  if (openMatch) {
+    const bracketStart = text.lastIndexOf("[[");
+    renderWikilinkAutocomplete(node, bracketStart, openMatch[1]);
+  } else {
+    closeWikilinkAutocomplete();
+  }
+});
+
+textEditor.addEventListener("keydown", (e) => {
+  if (wikilinkAutocompleteEl.classList.contains("hidden")) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    wikilinkAcIndex = Math.min(wikilinkAcIndex + 1, wikilinkAcItems.length - 1);
+    wikilinkAutocompleteEl.querySelectorAll(".wikilink-autocomplete-item").forEach((li, i) => li.classList.toggle("active", i === wikilinkAcIndex));
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    wikilinkAcIndex = Math.max(wikilinkAcIndex - 1, 0);
+    wikilinkAutocompleteEl.querySelectorAll(".wikilink-autocomplete-item").forEach((li, i) => li.classList.toggle("active", i === wikilinkAcIndex));
+  } else if (e.key === "Enter" || e.key === "Tab") {
+    e.preventDefault();
+    chooseWikilinkAutocomplete(wikilinkAcIndex);
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeWikilinkAutocomplete();
   }
 });
 
@@ -2780,7 +4208,7 @@ function renderTransclusionBlock(el, note) {
   header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
   const body = document.createElement("div");
   body.className = "transclusion-body";
-  body.innerHTML = note.locked ? "<p><em>Cette note est verrouillée.</em></p>" : note.html || "<p><em>Note vide.</em></p>";
+  body.innerHTML = note.locked ? "<p><em>Cette note est verrouillée.</em></p>" : sanitizeNoteHtml(note.html) || "<p><em>Note vide.</em></p>";
   el.appendChild(header);
   el.appendChild(body);
 }
@@ -2898,6 +4326,14 @@ formatToolbar.addEventListener("click", (e) => {
     tableDeleteColumn();
   } else if (cmd === "table-delete") {
     tableDelete();
+  } else if (cmd === "table-header-toggle") {
+    toggleTableHeader();
+  } else if (cmd === "code-block") {
+    insertCodeBlock();
+  } else if (cmd === "blockquote") {
+    document.execCommand("formatBlock", false, "blockquote");
+  } else if (cmd === "callout-info" || cmd === "callout-warning") {
+    insertCallout(cmd === "callout-warning" ? "warning" : "info");
   } else {
     document.execCommand(cmd, false, null);
     // Chrome leaves the caret at the START of the line after wrapping it
@@ -3095,10 +4531,16 @@ imageInput.addEventListener("change", () => {
 const voiceNoteBtn = document.getElementById("voice-note-btn");
 let activeRecorder = null;
 let audioChunks = [];
+let recordingNoteId = null;
 
 function setVoiceBtnRecording(recording) {
   setPressed(voiceNoteBtn, recording);
-  voiceNoteBtn.title = recording ? "Arrêter l'enregistrement" : "Enregistrer une note vocale";
+  const label = recording ? "Arrêter l'enregistrement" : "Enregistrer une note vocale";
+  voiceNoteBtn.title = label;
+  // The one-time "title -> aria-label" pass at load time froze this to the
+  // idle label forever; without updating it here too, a screen reader never
+  // announced that recording had actually started.
+  voiceNoteBtn.setAttribute("aria-label", label);
 }
 
 voiceNoteBtn.addEventListener("click", async () => {
@@ -3113,6 +4555,7 @@ voiceNoteBtn.addEventListener("click", async () => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
+    recordingNoteId = currentNote ? currentNote.id : null;
     activeRecorder = new MediaRecorder(stream);
     activeRecorder.addEventListener("dataavailable", (e) => {
       if (e.data.size) audioChunks.push(e.data);
@@ -3122,6 +4565,15 @@ voiceNoteBtn.addEventListener("click", async () => {
       const blob = new Blob(audioChunks, { type: "audio/webm" });
       const reader = new FileReader();
       reader.onload = () => {
+        setVoiceBtnRecording(false);
+        // If the editor was left mid-recording, there's no safe target note
+        // to insert into anymore (recordingNoteId no longer matches what's
+        // open, or nothing is open at all) — drop it rather than inserting
+        // into whatever note happens to be open now.
+        if (!editorScreen.classList.contains("active") || !currentNote || currentNote.id !== recordingNoteId) {
+          showToast("Enregistrement annulé (note fermée pendant l'enregistrement)");
+          return;
+        }
         restoreSelection();
         const audio = document.createElement("audio");
         audio.controls = true;
@@ -3135,7 +4587,10 @@ voiceNoteBtn.addEventListener("click", async () => {
           textEditor.appendChild(audio);
         }
         scheduleSave();
+      };
+      reader.onerror = () => {
         setVoiceBtnRecording(false);
+        showToast("Échec de l'enregistrement audio");
       };
       reader.readAsDataURL(blob);
     });
@@ -3147,6 +4602,23 @@ voiceNoteBtn.addEventListener("click", async () => {
   }
 });
 
+// A block copied from a spreadsheet (or any tab/comma-separated text with at
+// least 2 consistent columns across 2+ lines) becomes a real table instead
+// of landing as plain, unstructured text.
+function parseTabularText(text) {
+  // Tab is the only delimiter treated as a reliable "this came from a
+  // spreadsheet" signal — copying two lines of ordinary prose that each
+  // happen to contain one comma (very common in French) would otherwise
+  // get hijacked into an unwanted table.
+  if (!text.includes("\t")) return null;
+  const lines = text.replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim() !== "");
+  if (lines.length < 2) return null;
+  const rows = lines.map((l) => l.split("\t").map((cell) => cell.trim()));
+  const colCount = rows[0].length;
+  if (colCount < 2 || !rows.every((r) => r.length === colCount)) return null;
+  return rows;
+}
+
 textEditor.addEventListener("paste", (e) => {
   const items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
@@ -3157,6 +4629,31 @@ textEditor.addEventListener("paste", (e) => {
       return;
     }
   }
+  const text = e.clipboardData.getData("text/plain");
+  if (!text) return;
+  const rows = parseTabularText(text);
+  if (!rows) return;
+  e.preventDefault();
+  const table = document.createElement("table");
+  table.className = "note-table";
+  rows.forEach((cells, r) => {
+    const tr = document.createElement("tr");
+    cells.forEach((value) => {
+      const cell = document.createElement(r === 0 ? "th" : "td");
+      cell.contentEditable = "true";
+      cell.textContent = value;
+      tr.appendChild(cell);
+    });
+    table.appendChild(tr);
+  });
+  restoreSelection();
+  const sel = window.getSelection();
+  const range = sel.rangeCount ? sel.getRangeAt(0) : document.createRange();
+  if (!sel.rangeCount) range.selectNodeContents(textEditor);
+  range.collapse(false);
+  range.insertNode(table);
+  scheduleSave();
+  showToast("Tableau créé depuis le presse-papiers");
 });
 
 // --- OCR (photo -> texte), chargé à la demande depuis un CDN pour ne pas
@@ -3301,22 +4798,42 @@ const findInput = document.getElementById("find-input");
 const replaceInput = document.getElementById("replace-input");
 const findCount = document.getElementById("find-count");
 const replaceAllBtn = document.getElementById("replace-all-btn");
+const findRegexToggle = document.getElementById("find-regex-toggle");
+const findScopeToggle = document.getElementById("find-scope-toggle");
+const findScopeListEl = document.getElementById("find-scope-list");
+
+function buildFindRegex(term, useRegex) {
+  try {
+    return new RegExp(useRegex ? term : term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  } catch {
+    return null;
+  }
+}
+
+function countMatchesInText(text, re) {
+  if (!re) return 0;
+  re.lastIndex = 0;
+  const matches = text.match(re);
+  return matches ? matches.length : 0;
+}
 
 function countMatches(term) {
-  if (!term) return 0;
-  const text = textEditor.textContent.toLowerCase();
-  const needle = term.toLowerCase();
-  let count = 0;
-  let pos = 0;
-  while ((pos = text.indexOf(needle, pos)) !== -1) {
-    count++;
-    pos += needle.length;
-  }
-  return count;
+  const re = buildFindRegex(term, findRegexToggle.checked);
+  return countMatchesInText(textEditor.textContent, re);
 }
+
+// Multi-note scope keeps a checked-in/out selection per note id so the user
+// can review which notes actually match before committing a bulk replace,
+// rather than the old single-note "Tout remplacer" going in blind.
+let findScopeSelection = new Map();
 
 function updateFindCount() {
   const term = findInput.value;
+  if (findScopeToggle.checked) {
+    renderFindScopeList(term);
+    return;
+  }
+  findScopeListEl.classList.add("hidden");
   if (!term) {
     findCount.textContent = "";
     return;
@@ -3325,7 +4842,49 @@ function updateFindCount() {
   findCount.textContent = n ? `${n} résultat${n > 1 ? "s" : ""}` : "Aucun résultat";
 }
 
+function renderFindScopeList(term) {
+  findScopeListEl.classList.remove("hidden");
+  findScopeListEl.innerHTML = "";
+  if (!term) {
+    findCount.textContent = "";
+    return;
+  }
+  const re = buildFindRegex(term, findRegexToggle.checked);
+  if (!re) {
+    findCount.textContent = "Regex invalide";
+    return;
+  }
+  const matches = notes
+    .filter((n) => !n.deletedAt && !n.locked)
+    .map((n) => ({ note: n, count: countMatchesInText(stripHtml(n.html), re) }))
+    .filter((m) => m.count > 0);
+  findCount.textContent = matches.length
+    ? `${matches.length} note${matches.length > 1 ? "s" : ""} concernée${matches.length > 1 ? "s" : ""}`
+    : "Aucun résultat";
+  matches.forEach(({ note, count }) => {
+    if (!findScopeSelection.has(note.id)) findScopeSelection.set(note.id, true);
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("label");
+    label.style.display = "flex";
+    label.style.alignItems = "center";
+    label.style.gap = "8px";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = findScopeSelection.get(note.id);
+    cb.addEventListener("change", () => findScopeSelection.set(note.id, cb.checked));
+    const span = document.createElement("span");
+    span.textContent = `${note.title || "Sans titre"} (${count})`;
+    label.appendChild(cb);
+    label.appendChild(span);
+    li.appendChild(label);
+    findScopeListEl.appendChild(li);
+  });
+}
+
 findInput.addEventListener("input", updateFindCount);
+findRegexToggle.addEventListener("change", updateFindCount);
+findScopeToggle.addEventListener("change", updateFindCount);
 
 document.getElementById("find-btn").addEventListener("click", () => {
   findPanel.classList.toggle("hidden");
@@ -3336,24 +4895,73 @@ document.getElementById("find-btn").addEventListener("click", () => {
 });
 document.getElementById("find-close-btn").addEventListener("click", () => findPanel.classList.add("hidden"));
 
-replaceAllBtn.addEventListener("click", () => {
-  const term = findInput.value;
-  if (!term) return;
-  const replacement = replaceInput.value;
-  const walker = document.createTreeWalker(textEditor, NodeFilter.SHOW_TEXT);
-  const needle = term.toLowerCase();
-  let replaced = 0;
+// Runs a compiled regex replacement across an arbitrary HTML string's text
+// nodes (not the live editor), preserving formatting — used both for the
+// current note and for every other note in multi-note scope, since those
+// aren't loaded into textEditor.
+function replaceInHtml(html, re, replacement) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
   const nodes = [];
   let node;
   while ((node = walker.nextNode())) nodes.push(node);
+  let replaced = 0;
   nodes.forEach((n) => {
-    if (n.textContent.toLowerCase().includes(needle)) {
-      const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-      const matches = n.textContent.match(re);
-      if (matches) replaced += matches.length;
+    re.lastIndex = 0;
+    const matches = n.textContent.match(re);
+    if (matches) {
+      replaced += matches.length;
       n.textContent = n.textContent.replace(re, replacement);
     }
   });
+  return { html: container.innerHTML, replaced };
+}
+
+replaceAllBtn.addEventListener("click", async () => {
+  const term = findInput.value;
+  if (!term) return;
+  const replacement = replaceInput.value;
+  const re = buildFindRegex(term, findRegexToggle.checked);
+  if (!re) {
+    showToast("Regex invalide");
+    return;
+  }
+
+  if (findScopeToggle.checked) {
+    const targets = notes.filter((n) => !n.deletedAt && !n.locked && findScopeSelection.get(n.id));
+    let totalReplaced = 0;
+    let notesTouched = 0;
+    for (const note of targets) {
+      const { html, replaced } = replaceInHtml(note.html, re, replacement);
+      if (!replaced) continue;
+      if (!note.history) note.history = [];
+      note.history.push({ title: note.title, html: stripImagesForHistory(note.html), ts: Date.now() });
+      if (note.history.length > 20) {
+        const dropIndex = note.history.findIndex((s) => !s.pinned);
+        if (dropIndex !== -1) note.history.splice(dropIndex, 1);
+      }
+      note.html = html;
+      note.updatedAt = Date.now();
+      await persistNote(note);
+      totalReplaced += replaced;
+      notesTouched++;
+      if (currentNote && currentNote.id === note.id && editorScreen.classList.contains("active")) {
+        textEditor.innerHTML = note.html;
+        updateWordCount();
+      }
+    }
+    renderList();
+    updateFindCount();
+    showToast(totalReplaced ? `${totalReplaced} remplacement(s) dans ${notesTouched} note(s)` : "Aucun résultat");
+    return;
+  }
+
+  // Undoable via the version history panel, since there's no confirmation
+  // step before a bulk replace goes through.
+  pushHistorySnapshot();
+  const { html, replaced } = replaceInHtml(textEditor.innerHTML, re, replacement);
+  textEditor.innerHTML = html;
   scheduleSave();
   updateWordCount();
   updateFindCount();
@@ -3522,8 +5130,186 @@ function tableAddRow() {
 function tableAddColumn() {
   const table = currentTable();
   if (!table) return;
-  Array.from(table.rows).forEach((row) => row.appendChild(makeCell()));
+  Array.from(table.rows).forEach((row, i) => {
+    const isHeaderRow = i === 0 && row.cells[0] && row.cells[0].tagName === "TH";
+    if (isHeaderRow) {
+      const th = document.createElement("th");
+      th.contentEditable = "true";
+      th.innerHTML = "<br>";
+      row.appendChild(th);
+    } else {
+      row.appendChild(makeCell());
+    }
+  });
 }
+
+// Converts the first row between <td> (plain cells) and <th> (a real header
+// row: distinct style, and clicking a header sorts the table by that
+// column) — content of each cell is preserved either way.
+function toggleTableHeader() {
+  const table = currentTable();
+  if (!table || !table.rows.length) return;
+  const firstRow = table.rows[0];
+  const isHeader = firstRow.cells[0] && firstRow.cells[0].tagName === "TH";
+  Array.from(firstRow.cells).forEach((cell) => {
+    const replacement = document.createElement(isHeader ? "td" : "th");
+    replacement.contentEditable = "true";
+    replacement.innerHTML = cell.innerHTML;
+    cell.replaceWith(replacement);
+  });
+  scheduleSave();
+  showToast(isHeader ? "Ligne d'en-tête retirée" : "Ligne d'en-tête ajoutée (clique dessus pour trier)");
+}
+
+// --- Code blocks (with syntax coloring loaded on demand) and callouts ---
+const HLJS_CDN = "https://cdn.jsdelivr.net/npm/highlight.js@11/lib/core.min.js";
+const HLJS_LANGS_CDN = "https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages";
+const HLJS_CSS_CDN = "https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css";
+const HLJS_LANGUAGES = ["javascript", "python", "css", "xml", "json", "bash", "sql"];
+let hljsPromise = null;
+
+function loadHljsCss() {
+  if (document.getElementById("hljs-theme-css")) return;
+  const link = document.createElement("link");
+  link.id = "hljs-theme-css";
+  link.rel = "stylesheet";
+  link.href = HLJS_CSS_CDN;
+  document.head.appendChild(link);
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = src;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`CDN unreachable: ${src}`));
+    document.head.appendChild(script);
+  });
+}
+
+async function getHljs() {
+  if (window.hljs) return window.hljs;
+  if (!hljsPromise) {
+    hljsPromise = (async () => {
+      await loadScript(HLJS_CDN);
+      for (const lang of HLJS_LANGUAGES) {
+        await loadScript(`${HLJS_LANGS_CDN}/${lang}.min.js`).catch(() => {});
+      }
+      return window.hljs;
+    })();
+  }
+  return hljsPromise;
+}
+
+function insertCodeBlock() {
+  const pre = document.createElement("pre");
+  pre.className = "note-code";
+  const code = document.createElement("code");
+  code.contentEditable = "true";
+  // An empty contenteditable has no text node to anchor a caret in — Chrome's
+  // native typing then lands the very next keystroke as a sibling outside
+  // the element instead of inside it (the same issue the checklist items
+  // solve with a zero-width space placeholder).
+  code.textContent = "​";
+  const highlightBtn = document.createElement("button");
+  highlightBtn.type = "button";
+  highlightBtn.className = "note-code-highlight-btn";
+  highlightBtn.contentEditable = "false";
+  highlightBtn.textContent = "Colorer";
+  pre.appendChild(highlightBtn);
+  pre.appendChild(code);
+  restoreSelection();
+  const sel = window.getSelection();
+  const range = sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : (() => {
+    const r = document.createRange();
+    r.selectNodeContents(textEditor);
+    r.collapse(false);
+    return r;
+  })();
+  range.collapse(false);
+  range.insertNode(pre);
+  const p = document.createElement("p");
+  p.innerHTML = "<br>";
+  pre.after(p);
+  code.focus();
+  placeCaretAtEnd(code);
+  scheduleSave();
+}
+
+async function highlightCodeBlock(codeEl) {
+  try {
+    const hljs = await getHljs();
+    if (!hljs) throw new Error("hljs unavailable");
+    loadHljsCss();
+    codeEl.removeAttribute("data-highlighted");
+    hljs.highlightElement(codeEl);
+    codeEl.contentEditable = "false";
+    scheduleSave();
+  } catch {
+    showToast("Coloration syntaxique indisponible (connexion requise pour charger le moteur)");
+  }
+}
+
+// A small always-visible affordance on hover, rather than a separate
+// toolbar mode: click "Colorer" right on the code block that needs it.
+textEditor.addEventListener("click", (e) => {
+  const btn = e.target.closest(".note-code-highlight-btn");
+  if (!btn) return;
+  e.preventDefault();
+  const code = btn.parentElement.querySelector("code");
+  if (code) highlightCodeBlock(code);
+});
+
+function insertCallout(type) {
+  const div = document.createElement("div");
+  div.className = `note-callout note-callout-${type}`;
+  div.contentEditable = "true";
+  div.textContent = type === "warning" ? "Avertissement…" : "Info…";
+  restoreSelection();
+  const sel = window.getSelection();
+  const range = sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : (() => {
+    const r = document.createRange();
+    r.selectNodeContents(textEditor);
+    r.collapse(false);
+    return r;
+  })();
+  range.collapse(false);
+  range.insertNode(div);
+  const p = document.createElement("p");
+  p.innerHTML = "<br>";
+  div.after(p);
+  div.focus();
+  const selectRange = document.createRange();
+  selectRange.selectNodeContents(div);
+  sel.removeAllRanges();
+  sel.addRange(selectRange);
+  scheduleSave();
+}
+
+const tableSortState = new WeakMap(); // table -> { colIndex, dir }
+
+textEditor.addEventListener("click", (e) => {
+  const th = e.target.closest("table.note-table th");
+  if (!th) return;
+  const table = th.closest("table");
+  const row = th.parentElement;
+  const colIndex = Array.from(row.cells).indexOf(th);
+  if (colIndex === -1) return;
+  const state = tableSortState.get(table) || {};
+  const dir = state.colIndex === colIndex && state.dir === "asc" ? "desc" : "asc";
+  tableSortState.set(table, { colIndex, dir });
+  const bodyRows = Array.from(table.rows).slice(1);
+  bodyRows.sort((a, b) => {
+    const av = (a.cells[colIndex] && a.cells[colIndex].textContent.trim()) || "";
+    const bv = (b.cells[colIndex] && b.cells[colIndex].textContent.trim()) || "";
+    const an = parseFloat(av.replace(",", "."));
+    const bn = parseFloat(bv.replace(",", "."));
+    const cmp = !Number.isNaN(an) && !Number.isNaN(bn) ? an - bn : av.localeCompare(bv, "fr");
+    return dir === "asc" ? cmp : -cmp;
+  });
+  bodyRows.forEach((row) => table.appendChild(row));
+  scheduleSave();
+});
 
 function tableDelete() {
   const table = currentTable();
@@ -3547,7 +5333,7 @@ function currentCell() {
   for (const source of sources) {
     let node = source;
     if (node && node.nodeType === 3) node = node.parentElement;
-    const cell = node && node.closest ? node.closest("td") : null;
+    const cell = node && node.closest ? node.closest("td, th") : null;
     if (cell) return cell;
   }
   return null;
@@ -3615,6 +5401,10 @@ function tableDeleteColumn() {
 
 textEditor.addEventListener("change", (e) => {
   if (e.target.type === "checkbox") {
+    // The "checked" DOM property is not reflected in innerHTML, so without
+    // this the check state never survives serialization: it looked saved
+    // (the strike-through style did persist) but every box reopened empty.
+    e.target.toggleAttribute("checked", e.target.checked);
     const span = e.target.nextElementSibling;
     if (span) span.style.textDecoration = e.target.checked ? "line-through" : "none";
     scheduleSave();
@@ -3759,10 +5549,20 @@ function redrawStrokes() {
   const rect = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
   const strokes = (currentNote.drawing && currentNote.drawing.strokes) || [];
-  strokes.forEach((stroke) => drawStroke(stroke));
+  strokes.forEach((stroke) => drawStroke(stroke, rect));
 }
 
-function drawStroke(stroke) {
+// Stroke points are stored as fractions (0-1) of the canvas size at the
+// moment they were drawn, not raw pixels: a page is exactly as tall as its
+// text content, so its canvas resizes constantly (typing more text, "Agrandir
+// la page", rotating a phone, opening the same note on a wider screen). Raw
+// pixel points would stay put while the canvas around them changed size,
+// visibly drifting away from the text they were meant to mark up.
+function toCanvasPixels(point, rect) {
+  return { x: point.x * rect.width, y: point.y * rect.height };
+}
+
+function drawStroke(stroke, rect) {
   if (stroke.points.length < 1) return;
   ctx.save();
   ctx.globalCompositeOperation = stroke.erase ? "destination-out" : "source-over";
@@ -3773,8 +5573,9 @@ function drawStroke(stroke) {
   ctx.lineCap = stroke.highlight ? "square" : "round";
   ctx.beginPath();
   stroke.points.forEach((p, i) => {
-    if (i === 0) ctx.moveTo(p.x, p.y);
-    else ctx.lineTo(p.x, p.y);
+    const px = toCanvasPixels(p, rect);
+    if (i === 0) ctx.moveTo(px.x, px.y);
+    else ctx.lineTo(px.x, px.y);
   });
   ctx.stroke();
   ctx.restore();
@@ -3782,7 +5583,7 @@ function drawStroke(stroke) {
 
 function pointerPos(e) {
   const rect = canvas.getBoundingClientRect();
-  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
 }
 
 canvas.addEventListener("pointerdown", (e) => {
@@ -3796,9 +5597,12 @@ canvas.addEventListener("pointerdown", (e) => {
 
 canvas.addEventListener("pointermove", (e) => {
   if (!activeStroke) return;
+  const rect = canvas.getBoundingClientRect();
   const pos = pointerPos(e);
   const prev = activeStroke.points[activeStroke.points.length - 1];
   activeStroke.points.push(pos);
+  const prevPx = toCanvasPixels(prev, rect);
+  const posPx = toCanvasPixels(pos, rect);
   ctx.save();
   ctx.globalCompositeOperation = activeStroke.erase ? "destination-out" : "source-over";
   ctx.globalAlpha = activeStroke.highlight ? 0.4 : 1;
@@ -3807,8 +5611,8 @@ canvas.addEventListener("pointermove", (e) => {
   ctx.lineJoin = "round";
   ctx.lineCap = activeStroke.highlight ? "square" : "round";
   ctx.beginPath();
-  ctx.moveTo(prev.x, prev.y);
-  ctx.lineTo(pos.x, pos.y);
+  ctx.moveTo(prevPx.x, prevPx.y);
+  ctx.lineTo(posPx.x, posPx.y);
   ctx.stroke();
   ctx.restore();
 });
@@ -3890,6 +5694,209 @@ window.addEventListener("resize", () => {
   }
 });
 
+// --- Local automatic backup (File System Access API, Chromium desktop only)
+// A directory handle can be structured-cloned into IndexedDB and survives
+// across sessions (with the browser re-prompting for permission on first
+// use each session, per the API's security model) — kept in its own tiny
+// database rather than bumping the main notes DB's schema version. ---
+const BACKUP_DB_NAME = "noteflow-backup";
+const BACKUP_STORE = "handles";
+const BACKUP_KEY = "backupDir";
+let backupDbPromise = null;
+function openBackupDB() {
+  if (!backupDbPromise) {
+    backupDbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(BACKUP_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains(BACKUP_STORE)) req.result.createObjectStore(BACKUP_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return backupDbPromise;
+}
+async function saveBackupHandle(handle) {
+  const db = await openBackupDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BACKUP_STORE, "readwrite");
+    tx.objectStore(BACKUP_STORE).put(handle, BACKUP_KEY);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function loadBackupHandle() {
+  const db = await openBackupDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BACKUP_STORE, "readonly");
+    const req = tx.objectStore(BACKUP_STORE).get(BACKUP_KEY);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function clearBackupHandle() {
+  const db = await openBackupDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(BACKUP_STORE, "readwrite");
+    tx.objectStore(BACKUP_STORE).delete(BACKUP_KEY);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+const localBackupToggle = document.getElementById("local-backup-toggle");
+const localBackupPanel = document.getElementById("local-backup-panel");
+const localBackupStatusEl = document.getElementById("local-backup-status");
+const localBackupChooseBtn = document.getElementById("local-backup-choose-btn");
+const localBackupNowBtn = document.getElementById("local-backup-now-btn");
+const localBackupDisableBtn = document.getElementById("local-backup-disable-btn");
+let backupDirHandle = null;
+
+function setLocalBackupStatus(text) {
+  localBackupStatusEl.textContent = text;
+}
+
+localBackupToggle.addEventListener("click", () => localBackupPanel.classList.toggle("hidden"));
+
+async function runLocalBackup(silent) {
+  if (!backupDirHandle) return;
+  try {
+    const perm = await backupDirHandle.requestPermission({ mode: "readwrite" });
+    if (perm !== "granted") {
+      setLocalBackupStatus("🔴 Permission refusée pour ce dossier");
+      return;
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const fileHandle = await backupDirHandle.getFileHandle(`noteflow-backup-${stamp}.json`, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(notes, null, 2));
+    await writable.close();
+    setLocalBackupStatus(`🟢 Dernière sauvegarde : ${new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}`);
+    if (!silent) showToast("Sauvegarde locale effectuée");
+  } catch (err) {
+    setLocalBackupStatus("🔴 Échec de la sauvegarde : " + err.message);
+  }
+}
+
+localBackupChooseBtn.addEventListener("click", async () => {
+  if (!window.showDirectoryPicker) {
+    showToast("Non disponible sur ce navigateur (Chrome/Edge sur ordinateur uniquement)");
+    return;
+  }
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+    backupDirHandle = handle;
+    await saveBackupHandle(handle);
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    setLocalBackupStatus(`🟢 Dossier « ${handle.name} » configuré`);
+    await runLocalBackup(true);
+  } catch {
+    /* user cancelled the picker */
+  }
+});
+
+localBackupNowBtn.addEventListener("click", () => runLocalBackup(false));
+
+localBackupDisableBtn.addEventListener("click", async () => {
+  backupDirHandle = null;
+  await clearBackupHandle();
+  setLocalBackupStatus("Sauvegarde automatique locale non configurée");
+  showToast("Sauvegarde locale désactivée");
+});
+
+(async () => {
+  try {
+    const handle = await loadBackupHandle();
+    if (handle) {
+      backupDirHandle = handle;
+      setLocalBackupStatus(`🟡 Dossier « ${handle.name} » enregistré (autorisation à reconfirmer)`);
+    }
+  } catch {
+    /* no stored handle yet, or File System Access unsupported */
+  }
+})();
+
+// Every 30 minutes while the app stays open — there is no way to run this
+// while genuinely closed without a native background service, which would
+// mean a server component this app deliberately doesn't have.
+setInterval(() => runLocalBackup(true), 30 * 60 * 1000);
+
+// --- Journal: a dated note per day, in a "Journal" folder, matched by
+// journalDate (not by title, so renaming a day's entry doesn't orphan it)
+// with a mini calendar to jump to any date and see which days have one. ---
+async function openOrCreateJournalNote(dateStr) {
+  let note = notes.find((n) => !n.deletedAt && n.journalDate === dateStr);
+  if (!note) {
+    note = newNoteObject();
+    note.journalDate = dateStr;
+    note.folder = "Journal";
+    note.title = new Date(dateStr + "T00:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    notes.unshift(note);
+    await persistNote(note);
+  }
+  showList();
+  openNote(note.id);
+}
+
+document.getElementById("journal-today-btn").addEventListener("click", () => {
+  openOrCreateJournalNote(dateKey(Date.now()));
+});
+
+const journalCalOverlay = document.getElementById("journal-calendar-overlay");
+const journalCalMonthLabel = document.getElementById("journal-cal-month-label");
+const journalCalGrid = document.getElementById("journal-cal-grid");
+let journalCalViewDate = new Date();
+
+function renderJournalCalendar() {
+  const year = journalCalViewDate.getFullYear();
+  const month = journalCalViewDate.getMonth();
+  journalCalMonthLabel.textContent = journalCalViewDate.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+  const entryDates = new Set(notes.filter((n) => !n.deletedAt && n.journalDate).map((n) => n.journalDate));
+  const firstOfMonth = new Date(year, month, 1);
+  const startWeekday = (firstOfMonth.getDay() + 6) % 7; // Monday-first
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayKey = dateKey(Date.now());
+
+  journalCalGrid.innerHTML = "";
+  ["L", "M", "M", "J", "V", "S", "D"].forEach((d) => {
+    const span = document.createElement("span");
+    span.className = "journal-cal-weekday";
+    span.textContent = d;
+    journalCalGrid.appendChild(span);
+  });
+  for (let i = 0; i < startWeekday; i++) journalCalGrid.appendChild(document.createElement("span"));
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(year, month, day);
+    const key = dateKey(d.getTime());
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "journal-cal-day" + (entryDates.has(key) ? " has-entry" : "") + (key === todayKey ? " today" : "");
+    btn.textContent = String(day);
+    btn.addEventListener("click", () => {
+      journalCalOverlay.classList.add("hidden");
+      openOrCreateJournalNote(key);
+    });
+    journalCalGrid.appendChild(btn);
+  }
+}
+
+document.getElementById("journal-calendar-btn").addEventListener("click", () => {
+  journalCalViewDate = new Date();
+  journalCalOverlay.classList.remove("hidden");
+  renderJournalCalendar();
+});
+document.getElementById("journal-cal-prev").addEventListener("click", () => {
+  journalCalViewDate.setMonth(journalCalViewDate.getMonth() - 1);
+  renderJournalCalendar();
+});
+document.getElementById("journal-cal-next").addEventListener("click", () => {
+  journalCalViewDate.setMonth(journalCalViewDate.getMonth() + 1);
+  renderJournalCalendar();
+});
+journalCalOverlay.addEventListener("click", (e) => {
+  if (e.target === journalCalOverlay) journalCalOverlay.classList.add("hidden");
+});
+
 // --- Cloud sync (Firebase, optional) ---
 const SYNC_KEYS = { config: "noteflow.sync.config", code: "noteflow.sync.code" };
 const syncToggle = document.getElementById("sync-toggle");
@@ -3904,7 +5911,15 @@ let syncDb = null;
 let syncCode = "";
 let syncFns = null;
 let unsubscribeSnapshot = null;
-let applyingRemoteChange = false;
+// A Set of note ids, not a single flag: a global boolean meant that any
+// local edit autosaved during the awaits inside handleRemoteSnapshot (typing
+// in an unrelated note while a snapshot for a different note was still
+// being applied) got written to IndexedDB but silently skipped its
+// Firestore push — the edit only existed locally until the next remote
+// snapshot overwrote it. Scoping the guard to the specific id being applied
+// fixes that without losing the original protection (don't echo a remote
+// change straight back to Firestore).
+let applyingRemoteChangeIds = new Set();
 
 syncToggle.addEventListener("click", () => syncPanel.classList.toggle("hidden"));
 
@@ -3950,9 +5965,9 @@ async function startSync(config, code) {
 }
 
 async function handleRemoteSnapshot(snapshot) {
-  applyingRemoteChange = true;
   for (const change of snapshot.docChanges()) {
     const remote = change.doc.data();
+    applyingRemoteChangeIds.add(remote.id);
     const localIndex = notes.findIndex((n) => n.id === remote.id);
     if (change.type === "removed") {
       if (localIndex !== -1) {
@@ -3960,6 +5975,19 @@ async function handleRemoteSnapshot(snapshot) {
         await dbDelete(remote.id);
       }
     } else if (localIndex === -1 || remote.updatedAt > notes[localIndex].updatedAt) {
+      // Never apply a remote snapshot over a note with an unsaved edit still
+      // pending (autosave debounce in flight): replacing textEditor.innerHTML
+      // mid-keystroke jumps the caret to the start and can drop the current
+      // paragraph, and swapping the `notes[localIndex]` object reference out
+      // from under `currentNote` would desync the two silently. Skipping
+      // here is safe — the pending flush stamps its own updatedAt = now, so
+      // it will win the comparison above on the *next* remote snapshot and
+      // push the local edit back out once the user is done typing.
+      if (currentNote && currentNote.id === remote.id && editorScreen.classList.contains("active") && saveTimer) {
+        applyingRemoteChangeIds.delete(remote.id);
+        continue;
+      }
+      if (remote.html) remote.html = sanitizeNoteHtml(remote.html);
       if (localIndex === -1) notes.unshift(remote);
       else notes[localIndex] = remote;
       await dbPut(remote);
@@ -3968,13 +5996,12 @@ async function handleRemoteSnapshot(snapshot) {
         loadNoteIntoEditor();
       }
     }
+    applyingRemoteChangeIds.delete(remote.id);
   }
-  applyingRemoteChange = false;
   if (listScreen.classList.contains("active")) renderList();
 }
 
 async function persistNote(note) {
-  recordActivityToday();
   // A locked note is never written to IndexedDB/Firestore in clear: while an
   // unlock key is active for it, its body/drawing/history are swapped for an
   // AES-GCM ciphertext just for the write, then restored in memory right after.
@@ -3988,24 +6015,34 @@ async function persistNote(note) {
     note.drawing = null;
     note.history = [];
   }
-  await dbPut(note);
-  if (syncDb && syncCode && !applyingRemoteChange) {
-    try {
-      await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), note);
-    } catch (err) {
-      console.warn("sync push failed", err);
+  try {
+    await dbPut(note);
+    if (syncDb && syncCode && !applyingRemoteChangeIds.has(note.id)) {
+      try {
+        await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), note);
+      } catch (err) {
+        console.warn("sync push failed", err);
+      }
     }
-  }
-  if (restore) {
-    note.html = restore.html;
-    note.drawing = restore.drawing;
-    note.history = restore.history;
+  } finally {
+    // In a finally, not just after: if dbPut() threw (quota exceeded, say),
+    // the in-memory note was left with html/drawing/history wiped out by the
+    // encrypt-for-write swap above, with no write having actually succeeded
+    // to justify that — flushSave's own catch block would report "Erreur"
+    // while the open note silently looked empty.
+    if (restore) {
+      note.html = restore.html;
+      note.drawing = restore.drawing;
+      note.history = restore.history;
+    }
   }
 }
 
 async function removeNoteEverywhere(id) {
+  previewCache.delete(id);
+  checklistProgressCache.delete(id);
   await dbDelete(id);
-  if (syncDb && syncCode && !applyingRemoteChange) {
+  if (syncDb && syncCode && !applyingRemoteChangeIds.has(id)) {
     try {
       await syncFns.deleteDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", id));
     } catch (err) {
@@ -4036,6 +6073,12 @@ syncDisableBtn.addEventListener("click", () => {
   localStorage.removeItem(SYNC_KEYS.config);
   localStorage.removeItem(SYNC_KEYS.code);
   if (unsubscribeSnapshot) unsubscribeSnapshot();
+  // Leaving these set meant a second "Activer" click after disabling could
+  // call an already-unsubscribed listener, or briefly get treated as still
+  // mid-remote-application.
+  unsubscribeSnapshot = null;
+  syncFns = null;
+  applyingRemoteChangeIds.clear();
   syncDb = null;
   syncCode = "";
   setSyncStatus("Synchronisation non configurée");
@@ -4062,7 +6105,7 @@ document.addEventListener("keydown", (e) => {
       lockCancelBtn.click();
       return;
     }
-    [reminderPanel, historyPanel, backlinksPanel, ephemeralPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
+    [reminderPanel, historyPanel, backlinksPanel, outlinePanel, ephemeralPanel, colorPanel, paperPanel, findPanel].forEach((p) => p.classList.add("hidden"));
   }
 
   const mod = e.metaKey || e.ctrlKey;
@@ -4115,6 +6158,14 @@ document.addEventListener("keydown", (e) => {
   if (key === "s") {
     e.preventDefault();
     flushSave(false);
+  } else if (key === "f") {
+    // Otherwise ⌘F only ever opened the browser's own find bar in the
+    // editor, even though a real find/replace panel exists right there —
+    // inconsistent with the list screen, where ⌘F already focuses search.
+    e.preventDefault();
+    findPanel.classList.remove("hidden");
+    findInput.focus();
+    updateFindCount();
   }
   // Ctrl/Cmd+B, +I, +U are left to the browser's native contenteditable
   // handling (calling execCommand ourselves on top of it double-toggles
@@ -4130,47 +6181,152 @@ let cmdkActiveIndex = 0;
 
 function closeCommandPalette() {
   cmdkOverlay.classList.add("hidden");
+  restoreModalFocus();
 }
 
 function openCommandPalette() {
+  modalReturnFocusEl = document.activeElement;
   cmdkOverlay.classList.remove("hidden");
   cmdkInput.value = "";
   renderCmdkResults("");
   setTimeout(() => cmdkInput.focus(), 30);
 }
 
-function goToNote(id) {
-  if (editorScreen.classList.contains("active")) flushSave(true);
+// --- Modal focus trap: while the command palette or the lock overlay is
+// open, Tab/Shift+Tab stay inside it instead of leaking into the screen
+// underneath (which the user believes is inaccessible — most concretely,
+// tabbing "through" a locked note's overlay used to land back in that
+// note's own editor). Focus returns to whatever opened the modal on close.
+let modalReturnFocusEl = null;
+
+function restoreModalFocus() {
+  if (modalReturnFocusEl && document.body.contains(modalReturnFocusEl)) modalReturnFocusEl.focus();
+  modalReturnFocusEl = null;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const openModal = [cmdkOverlay, lockOverlay].find((el) => !el.classList.contains("hidden"));
+  if (!openModal) return;
+  const focusable = Array.from(
+    openModal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+  ).filter((el) => !el.disabled && el.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+});
+
+async function goToNote(id) {
+  if (editorScreen.classList.contains("active")) await flushSave(true);
   showList();
   openNote(id);
 }
 
 function cmdkActionItems(query) {
+  const inEditor = editorScreen.classList.contains("active") && currentNote;
   const items = [
     { label: "Nouvelle note", sub: "Créer une note vide", action: () => newNoteBtn.click() },
     { label: "Basculer le thème", sub: "Auto / clair / sombre", action: () => themeToggle.click() },
     { label: "Voir les archives", sub: "", action: () => { showList(); setListView("archived"); } },
     { label: "Voir la corbeille", sub: "", action: () => { showList(); setListView("trash"); } },
     { label: "Sélection multiple", sub: "Archiver / déplacer / supprimer plusieurs notes", action: () => { showList(); setSelectionMode(true); } },
+    { label: "Note du jour", sub: "Journal", action: () => document.getElementById("journal-today-btn").click() },
   ];
+  // These only make sense with a note actually open — listed here instead of
+  // buried in the editor's own "..." menu, since ⌘K is meant to be the one
+  // place that reaches every action without hunting through menus.
+  if (inEditor) {
+    items.push(
+      { label: currentNote.locked ? "Retirer le verrou" : "Verrouiller la note", sub: "", action: () => lockBtn.click() },
+      { label: "Dupliquer la note", sub: "", action: () => duplicateNoteBtn.click() },
+      { label: "Scinder par titres (H2)", sub: "", action: () => document.getElementById("split-note-btn").click() },
+      { label: "Extraire les tâches", sub: "", action: () => document.getElementById("extract-tasks-btn").click() },
+      { label: "Reporter les tâches non faites", sub: "", action: () => document.getElementById("carry-over-tasks-btn").click() },
+      { label: "Exporter cette note", sub: "JSON", action: () => document.getElementById("export-note-btn").click() },
+      { label: "Exporter en Markdown", sub: "", action: () => document.getElementById("export-markdown-btn").click() },
+      { label: "Mode dessin & surlignage", sub: "", action: () => modeDrawBtn.click() },
+      { label: "Mode focus", sub: "", action: () => focusBtn.click() },
+      { label: "Mode lecture", sub: "", action: () => readingModeBtn.click() },
+      { label: "Rechercher / remplacer", sub: "Dans cette note", action: () => document.getElementById("find-btn").click() },
+      { label: "Sommaire", sub: "", action: () => document.getElementById("outline-btn").click() },
+      { label: "Volet secondaire", sub: "Voir une autre note à côté", action: () => document.getElementById("split-view-btn").click() },
+      { label: "Archiver la note", sub: "", action: () => archiveBtn.click() },
+      { label: "Supprimer la note", sub: "", action: () => deleteNoteBtn.click() }
+    );
+  }
   if (!query) return items;
   const q = query.toLowerCase();
   return items.filter((it) => it.label.toLowerCase().includes(q));
 }
 
-function renderCmdkResults(query) {
+function renderCmdkResults(rawQuery) {
+  // Prefixes narrow the palette to one kind of result, Slack/Spotlight-style:
+  // ">" actions only, "#" tags, "/" folders — otherwise it's the default mix
+  // of actions + matching notes (now searched by content too, not just
+  // title/folder).
+  const mode = rawQuery[0] === ">" || rawQuery[0] === "#" || rawQuery[0] === "/" ? rawQuery[0] : null;
+  const query = mode ? rawQuery.slice(1) : rawQuery;
   const q = query.trim().toLowerCase();
-  const noteItems = notes
-    .filter((n) => !n.deletedAt)
-    .filter((n) => !q || (n.title || "sans titre").toLowerCase().includes(q) || (n.folder || "").toLowerCase().includes(q))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 8)
-    .map((n) => ({
+
+  if (mode === "#") {
+    const tagItems = allTags()
+      .filter((t) => !q || t.toLowerCase().includes(q))
+      .map((t) => ({
+        label: "#" + t,
+        sub: `${notes.filter((n) => !n.deletedAt && (n.tags || []).includes(t)).length} note(s)`,
+        action: () => {
+          showList();
+          activeTagFilter = t;
+          renderList();
+        },
+      }));
+    cmdkItems = tagItems;
+  } else if (mode === "/") {
+    const folderItems = allFolders()
+      .filter((f) => !q || f.toLowerCase().includes(q))
+      .map((f) => ({
+        label: f,
+        sub: `${notes.filter((n) => !n.deletedAt && (n.folder === f || (n.folder || "").startsWith(f + "/"))).length} note(s)`,
+        action: () => {
+          showList();
+          activeFolderFilter = f;
+          renderList();
+        },
+      }));
+    cmdkItems = folderItems;
+  } else if (mode === ">") {
+    cmdkItems = cmdkActionItems(q);
+  } else {
+    let candidateNotes = notes.filter((n) => !n.deletedAt);
+    if (!q) {
+      const recentIds = loadPref(RECENT_NOTES_KEY, []);
+      const recentSet = new Set(recentIds);
+      candidateNotes = recentIds.map((id) => notes.find((n) => n.id === id && !n.deletedAt)).filter(Boolean);
+      if (!candidateNotes.length) candidateNotes = notes.filter((n) => !n.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
+    } else {
+      candidateNotes = candidateNotes
+        .filter((n) => {
+          const haystack = (n.title || "sans titre") + " " + (n.folder || "") + " " + (n.tags || []).join(" ") + " " + (n.locked ? "" : getPreview(n));
+          return haystack.toLowerCase().includes(q);
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 8);
+    }
+    const noteItems = candidateNotes.map((n) => ({
       label: n.locked ? "🔒 " + (n.title || "Sans titre") : n.title || "Sans titre",
       sub: n.folder || "Note",
       action: () => goToNote(n.id),
     }));
-  cmdkItems = [...cmdkActionItems(query), ...noteItems];
+    cmdkItems = [...cmdkActionItems(q), ...noteItems];
+  }
+
   cmdkActiveIndex = 0;
   cmdkList.innerHTML = "";
   if (!cmdkItems.length) {
@@ -4261,6 +6417,7 @@ async function handleIncomingShare() {
   }
   showList();
   await handleIncomingShare();
+  summarizeMissedReminders();
   initSyncFromStorage();
 })();
 

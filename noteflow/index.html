@@ -4,8 +4,8 @@
 <meta charset="UTF-8" />
 <title>NoteFlow</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)" />
-<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#0d0c0a" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f0e9dc" media="(prefers-color-scheme: light)" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="NoteFlow" />
@@ -73,7 +73,7 @@
         <span id="streak-badge" class="streak-badge hidden" title="Jours consécutifs d'activité"></span>
       </div>
       <div class="topbar-actions">
-        <input id="import-input" type="file" accept="application/json,.json,.ics,.vcf,.noteflow" class="hidden" />
+        <input id="import-input" type="file" accept="application/json,.json,.ics,.vcf,.noteflow,.md" class="hidden" />
         <button id="cmdk-btn" class="icon-btn cmdk-trigger" type="button" title="Palette de commandes (⌘K)">⌘K</button>
         <button id="theme-toggle" class="icon-btn" type="button" title="Thème"><svg class="icon"><use href="#icon-contrast"/></svg></button>
         <div class="menu-wrap">
@@ -82,9 +82,14 @@
             <button class="menu-item" id="export-btn" type="button"><svg class="icon"><use href="#icon-download"/></svg>Exporter les notes</button>
             <button class="menu-item" id="import-btn" type="button"><svg class="icon"><use href="#icon-upload"/></svg>Importer des notes</button>
             <button class="menu-item" id="sync-toggle" type="button"><svg class="icon"><use href="#icon-cloud"/></svg>Synchronisation</button>
+            <button class="menu-item" id="local-backup-toggle" type="button"><svg class="icon"><use href="#icon-download"/></svg>Sauvegarde automatique locale</button>
+            <button class="menu-item" id="journal-today-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Note du jour</button>
+            <button class="menu-item" id="journal-calendar-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Calendrier du journal</button>
             <div class="menu-sep"></div>
             <button class="menu-item" id="select-mode-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Sélection multiple</button>
             <button class="menu-item" id="manage-tags-btn" type="button"><svg class="icon"><use href="#icon-star"/></svg>Gérer les tags</button>
+            <button class="menu-item" id="manage-snippets-btn" type="button"><svg class="icon"><use href="#icon-pencil"/></svg>Abréviations</button>
+            <button class="menu-item" id="hygiene-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Hygiène du carnet</button>
             <button class="menu-item" id="sound-toggle-btn" type="button"><svg class="icon"><use href="#icon-sound"/></svg>Sons</button>
             <button class="menu-item" id="contrast-toggle-btn" type="button"><svg class="icon"><use href="#icon-contrast"/></svg>Contraste renforcé</button>
             <div class="menu-sep"></div>
@@ -125,15 +130,41 @@
       </div>
     </div>
 
+    <div id="local-backup-panel" class="sync-panel hidden">
+      <p id="local-backup-status" class="sync-status">Sauvegarde automatique locale non configurée</p>
+      <p class="panel-hint">Choisis un dossier sur ton disque : NoteFlow y dépose un export horodaté du carnet, périodiquement pendant que l'app est ouverte, ou à la demande.</p>
+      <div class="sync-actions">
+        <button id="local-backup-choose-btn" type="button">Choisir un dossier</button>
+        <button id="local-backup-now-btn" type="button" class="link-btn">Sauvegarder maintenant</button>
+        <button id="local-backup-disable-btn" type="button" class="link-btn">Désactiver</button>
+      </div>
+    </div>
+
     <div id="tag-manager-panel" class="side-panel hidden">
       <p class="sync-status">Gérer les tags</p>
       <ul id="tag-manager-list" class="history-list"></ul>
       <p class="panel-hint">Renommer un tag vers un tag déjà existant les fusionne en un seul.</p>
     </div>
 
+    <div id="snippet-manager-panel" class="side-panel hidden">
+      <p class="sync-status">Abréviations</p>
+      <ul id="snippet-manager-list" class="history-list"></ul>
+      <div class="sync-actions" style="flex-wrap: wrap;">
+        <input id="snippet-trigger-input" type="text" class="sync-code-input" placeholder="Déclencheur (ex: ;cr)" style="flex: 1; min-width: 100px;" autocomplete="off" />
+        <input id="snippet-expansion-input" type="text" class="sync-code-input" placeholder="Texte développé (ex: Compte rendu du $|)" style="flex: 2; min-width: 160px;" autocomplete="off" />
+        <button id="snippet-add-btn" type="button">Ajouter</button>
+      </div>
+      <p class="panel-hint">Tape le déclencheur puis espace/Entrée pour le développer. "$|" dans le texte marque où placer le curseur.</p>
+    </div>
+
+    <div id="hygiene-panel" class="side-panel hidden">
+      <p class="sync-status">Hygiène du carnet</p>
+      <ul id="hygiene-list" class="history-list"></ul>
+    </div>
+
     <div class="search-row">
       <svg class="icon search-icon"><use href="#icon-search"/></svg>
-      <input id="search-input" type="search" class="search-input" placeholder="Rechercher… (⌘F)" autocomplete="off" />
+      <input id="search-input" type="search" class="search-input" placeholder="Rechercher… tag: dossier: est: avant: (⌘F)" autocomplete="off" title="tag:x  dossier:x  est:verrouillée/archivée/épinglée  avant:AAAA-MM-JJ  apres:AAAA-MM-JJ  &quot;phrase&quot;  -exclusion" />
       <button id="save-search-btn" class="icon-btn" type="button" title="Enregistrer cette recherche"><svg class="icon"><use href="#icon-star"/></svg></button>
       <select id="sort-select" title="Trier">
         <option value="recent">Récentes</option>
@@ -163,11 +194,14 @@
             <button class="menu-item" id="duplicate-note-btn" type="button"><svg class="icon"><use href="#icon-duplicate"/></svg>Dupliquer</button>
             <button class="menu-item" id="split-note-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Scinder par titres</button>
             <button class="menu-item" id="extract-tasks-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Extraire les tâches</button>
+            <button class="menu-item" id="carry-over-tasks-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Reporter les tâches non faites</button>
             <button class="menu-item" id="share-note-btn" type="button"><svg class="icon"><use href="#icon-share"/></svg>Partager</button>
             <button class="menu-item" id="export-note-btn" type="button"><svg class="icon"><use href="#icon-download"/></svg>Exporter cette note</button>
             <button class="menu-item" id="export-webpage-btn" type="button"><svg class="icon"><use href="#icon-share"/></svg>Exporter en page web</button>
+            <button class="menu-item" id="export-markdown-btn" type="button"><svg class="icon"><use href="#icon-download"/></svg>Exporter en Markdown</button>
             <button class="menu-item" id="share-encrypted-btn" type="button"><svg class="icon"><use href="#icon-lock-closed"/></svg>Partager (fichier chiffré)</button>
             <button class="menu-item" id="focus-btn" type="button"><svg class="icon"><use href="#icon-focus"/></svg>Mode focus</button>
+            <button class="menu-item" id="reading-mode-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Mode lecture</button>
             <button class="menu-item" id="color-btn" type="button"><svg class="icon"><use href="#icon-palette"/></svg>Couleur de note</button>
             <button class="menu-item" id="paper-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Style de page</button>
             <div class="menu-sep"></div>
@@ -175,6 +209,8 @@
             <button class="menu-item" id="ephemeral-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Note éphémère</button>
             <button class="menu-item" id="history-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Historique des versions</button>
             <button class="menu-item" id="backlinks-btn" type="button"><svg class="icon"><use href="#icon-link"/></svg>Notes liées</button>
+            <button class="menu-item" id="outline-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Sommaire</button>
+            <button class="menu-item" id="split-view-btn" type="button"><svg class="icon"><use href="#icon-page"/></svg>Volet secondaire</button>
             <button class="menu-item" id="lock-btn" type="button"><svg class="icon"><use href="#icon-lock-open"/></svg>Verrouiller</button>
             <button class="menu-item" id="biometric-setup-btn" type="button"><svg class="icon"><use href="#icon-lock-closed"/></svg>Activer Face ID / empreinte</button>
             <button class="menu-item" id="print-btn" type="button"><svg class="icon"><use href="#icon-print"/></svg>Imprimer / PDF</button>
@@ -189,6 +225,14 @@
     <div id="reminder-panel" class="side-panel hidden">
       <label class="sync-label">Me rappeler cette note
         <input id="reminder-input" type="datetime-local" class="sync-code-input" />
+      </label>
+      <label class="sync-label">Récurrence
+        <select id="reminder-recur-select">
+          <option value="">Aucune</option>
+          <option value="daily">Chaque jour</option>
+          <option value="weekly">Chaque semaine</option>
+          <option value="monthly">Chaque mois</option>
+        </select>
       </label>
       <p class="panel-hint">Le rappel ne se déclenche que si NoteFlow est ouvert dans un onglet (pas de notification en arrière-plan).</p>
       <div class="sync-actions">
@@ -221,6 +265,12 @@
       <p class="panel-hint">Tape <code>[[Titre de la note]]</code> dans le texte pour créer un lien vers une autre note.</p>
     </div>
 
+    <div id="outline-panel" class="side-panel hidden">
+      <p class="sync-status">Sommaire</p>
+      <ul id="outline-list" class="history-list"></ul>
+      <p class="panel-hint">Clique un titre pour y aller, ou sur ▾ pour replier sa section.</p>
+    </div>
+
     <div id="color-panel" class="side-panel hidden">
       <p class="sync-status">Couleur de la note</p>
       <div class="color-row" id="note-color-row"></div>
@@ -238,7 +288,12 @@
       <label class="sync-label">Remplacer par
         <input id="replace-input" type="text" class="sync-code-input" placeholder="Texte de remplacement" autocomplete="off" />
       </label>
+      <div class="find-options-row">
+        <label><input type="checkbox" id="find-regex-toggle" /> Regex</label>
+        <label><input type="checkbox" id="find-scope-toggle" /> Toutes les notes</label>
+      </div>
       <p id="find-count" class="panel-hint"></p>
+      <ul id="find-scope-list" class="history-list hidden"></ul>
       <div class="sync-actions">
         <button id="replace-all-btn" type="button">Tout remplacer</button>
         <button id="find-close-btn" type="button" class="link-btn">Fermer</button>
@@ -250,6 +305,11 @@
       <input id="folder-input" type="text" class="folder-input" placeholder="Dossier (ex: Travail/Projets)" maxlength="60" autocomplete="off" />
       <input id="tags-input" type="text" class="folder-input tags-input" placeholder="#tags, séparés par des virgules" maxlength="120" autocomplete="off" />
       <span id="word-count" class="word-count"></span>
+    </div>
+
+    <div class="properties-row" id="properties-row">
+      <div class="properties-chips" id="properties-chips"></div>
+      <input id="properties-input" type="text" class="properties-input" placeholder="clé: valeur, puis Entrée (ex: statut: en cours)" autocomplete="off" />
     </div>
 
     <div class="mode-switch">
@@ -284,12 +344,19 @@
         <button type="button" data-cmd="removeFormat" title="Effacer la mise en forme">⊘</button>
       </div>
       <div class="toolbar-group">
+        <button type="button" data-cmd="code-block" title="Bloc de code">&lt;/&gt;</button>
+        <button type="button" data-cmd="blockquote" title="Citation">❝</button>
+        <button type="button" data-cmd="callout-info" title="Encadré info">ℹ</button>
+        <button type="button" data-cmd="callout-warning" title="Encadré avertissement">⚠</button>
+      </div>
+      <div class="toolbar-group">
         <button type="button" data-cmd="table" title="Insérer un tableau">▦</button>
         <button type="button" data-cmd="table-add-row" title="Ajouter une ligne">＋⎯</button>
         <button type="button" data-cmd="table-add-col" title="Ajouter une colonne">＋❘</button>
         <button type="button" data-cmd="table-delete-row" title="Supprimer la ligne">−⎯</button>
         <button type="button" data-cmd="table-delete-col" title="Supprimer la colonne">−❘</button>
         <button type="button" data-cmd="table-delete" title="Supprimer le tableau">▦⊘</button>
+        <button type="button" data-cmd="table-header-toggle" title="Basculer la ligne d'en-tête">▦↑</button>
       </div>
       <div class="toolbar-group">
         <button type="button" data-cmd="link" title="Insérer un lien"><svg class="icon"><use href="#icon-link"/></svg></button>
@@ -336,15 +403,27 @@
     </div>
     <p class="draw-hint hidden" id="draw-hint">Dessine ou surligne directement sur ta page : le texte reste visible en dessous.</p>
 
-    <div class="page-scroll" id="page-scroll">
-      <div id="note-page" class="note-page">
-        <canvas id="draw-canvas"></canvas>
-        <div id="text-editor" class="text-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Contenu de la note" data-placeholder="Écris ta note ici…" spellcheck="true" autocorrect="on" autocapitalize="sentences"></div>
-        <span id="page-folio" class="page-folio hidden" aria-hidden="true"></span>
-        <div id="corner-fold" class="corner-fold" aria-hidden="true"></div>
-        <div id="bookmark-ribbon" class="bookmark-ribbon hidden" aria-hidden="true"></div>
+    <div class="editor-body" id="editor-body">
+      <div class="reading-progress hidden" id="reading-progress"><span id="reading-progress-fill"></span></div>
+      <div class="page-scroll" id="page-scroll">
+        <div id="note-page" class="note-page">
+          <canvas id="draw-canvas"></canvas>
+          <div id="text-editor" class="text-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Contenu de la note" data-placeholder="Écris ta note ici…" spellcheck="true" autocorrect="on" autocapitalize="sentences"></div>
+          <ul id="wikilink-autocomplete" class="wikilink-autocomplete hidden" role="listbox"></ul>
+          <span id="page-folio" class="page-folio hidden" aria-hidden="true"></span>
+          <div id="corner-fold" class="corner-fold" aria-hidden="true"></div>
+          <div id="bookmark-ribbon" class="bookmark-ribbon hidden" aria-hidden="true"></div>
+        </div>
+        <button type="button" id="grow-page-btn" class="grow-page-btn">+ Agrandir la page</button>
       </div>
-      <button type="button" id="grow-page-btn" class="grow-page-btn">+ Agrandir la page</button>
+      <div id="split-view-pane" class="split-view-pane hidden">
+        <div class="split-view-header">
+          <input id="split-view-search" type="text" class="sync-code-input" placeholder="Afficher une autre note ici…" autocomplete="off" />
+          <button type="button" id="split-view-close" class="icon-btn" title="Fermer le volet"><svg class="icon"><use href="#icon-close"/></svg></button>
+        </div>
+        <ul id="split-view-results" class="cmdk-list split-view-results hidden"></ul>
+        <div id="split-view-content" class="split-view-content"></div>
+      </div>
     </div>
   </section>
 
@@ -353,7 +432,7 @@
     <button id="toast-undo" type="button">Annuler</button>
   </div>
 
-  <div id="command-palette" class="command-palette hidden">
+  <div id="command-palette" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Palette de commandes">
     <div class="cmdk-box">
       <div class="cmdk-input-row">
         <svg class="icon"><use href="#icon-search"/></svg>
@@ -363,9 +442,9 @@
     </div>
   </div>
 
-  <div id="lock-overlay" class="lock-overlay hidden">
+  <div id="lock-overlay" class="lock-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="lock-title">
     <div class="lock-box">
-      <p class="lock-title"><svg class="icon"><use href="#icon-lock-closed"/></svg> Note verrouillée</p>
+      <p class="lock-title" id="lock-title"><svg class="icon"><use href="#icon-lock-closed"/></svg> Note verrouillée</p>
       <input id="lock-input" type="password" inputmode="numeric" class="lock-input" placeholder="Code" autocomplete="off" />
       <p id="lock-error" class="lock-error hidden">Code incorrect</p>
       <div class="sync-actions">
@@ -373,6 +452,17 @@
         <button id="lock-biometric-btn" type="button" class="link-btn hidden">Empreinte / Face ID</button>
         <button id="lock-cancel-btn" type="button" class="link-btn">Retour à la liste</button>
       </div>
+    </div>
+  </div>
+
+  <div id="journal-calendar-overlay" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Calendrier du journal">
+    <div class="cmdk-box journal-calendar-box">
+      <div class="journal-calendar-header">
+        <button type="button" id="journal-cal-prev" class="icon-btn" title="Mois précédent">‹</button>
+        <span id="journal-cal-month-label"></span>
+        <button type="button" id="journal-cal-next" class="icon-btn" title="Mois suivant">›</button>
+      </div>
+      <div id="journal-cal-grid" class="journal-calendar-grid"></div>
     </div>
   </div>
 </div>
