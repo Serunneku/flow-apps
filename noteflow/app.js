@@ -781,11 +781,18 @@ importInput.addEventListener("change", async () => {
       const count = await importEncryptedPacket(packet);
       if (count) showToast("Note déchiffrée et importée");
     } else if (name.endsWith(".md")) {
-      const note = importMarkdown(await file.text());
-      notes.unshift(note);
-      await persistNote(note);
+      const mdFiles = Array.from(importInput.files).filter((f) => f.name.toLowerCase().endsWith(".md"));
+      const imported = [];
+      for (const f of mdFiles) {
+        imported.push(importMarkdown(await f.text(), f.name));
+      }
+      resolveImportedWikilinks(imported);
+      for (const note of imported) {
+        notes.unshift(note);
+        await persistNote(note);
+      }
       renderList();
-      showToast("Note importée depuis Markdown");
+      showToast(`${imported.length} note${imported.length > 1 ? "s" : ""} importée${imported.length > 1 ? "s" : ""} depuis Markdown`);
     } else {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -2562,6 +2569,14 @@ function markdownToHtml(md) {
       .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
       .replace(/~~(.+?)~~/g, "<s>$1</s>")
       .replace(/(?:^|[^*])\*([^*]+?)\*(?!\*)/g, (m, g1) => m[0] + `<i>${g1}</i>`)
+      // Obsidian-style [[Page]] / [[Page|Alias]] wikilinks: left as a marker
+      // span here (bare text at this point, no target note known yet) —
+      // resolveImportedWikilinks() turns matching ones into real internal
+      // links once every file in the batch has been parsed.
+      .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (m, target, alias) => {
+        const label = (alias || target).trim();
+        return `<span class="wikilink-pending" data-wikilink-title="${target.trim()}">${label}</span>`;
+      })
       .replace(/\[([^\]]*)\]\(([^)]*)\)/g, '<a href="$2">$1</a>');
   }
   while (i < lines.length) {
@@ -2648,14 +2663,61 @@ function exportNoteAsMarkdown(note) {
   return front.join("\n") + htmlToMarkdown(note.html);
 }
 
-function importMarkdown(text) {
+// Notion's bulk export appends a 32-char hex block id to every filename
+// ("Meeting Notes 3f9a1c2b4d5e6f7a8b9c0d1e2f3a4b5c.md") — strip it so the
+// imported note's title matches what the user actually sees in Notion.
+function titleFromFilename(filename) {
+  return (filename || "")
+    .replace(/\.md$/i, "")
+    .replace(/\s+[0-9a-f]{32}$/i, "")
+    .trim();
+}
+
+function importMarkdown(text, filenameHint) {
   const { meta, body } = parseFrontMatter(text);
   const note = newNoteObject();
-  note.title = meta.title || "Note importée";
+  let title = meta.title;
+  if (!title) {
+    const h1 = body.match(/^#\s+(.+)$/m);
+    if (h1) title = h1[1].trim();
+  }
+  if (!title && filenameHint) title = titleFromFilename(filenameHint);
+  note.title = title || "Note importée";
   note.folder = meta.folder || "";
   note.tags = Array.isArray(meta.tags) ? meta.tags : meta.tags ? [meta.tags] : [];
   note.html = sanitizeNoteHtml(markdownToHtml(body));
   return note;
+}
+
+// Second pass over a whole imported batch: [[Page]] markers left by
+// markdownToHtml become real internal wikilinks when their target is found
+// either among the notes just imported or already in the active vault —
+// resolving against the batch first is what makes Obsidian/Notion exports
+// (which link to each other, not to anything already in NoteFlow) work.
+function resolveImportedWikilinks(importedNotes) {
+  const titleIndex = new Map();
+  [...notesInActiveVault(), ...importedNotes].forEach((n) => {
+    if (!n.deletedAt) titleIndex.set((n.title || "").toLowerCase(), n);
+  });
+  importedNotes.forEach((note) => {
+    if (!note.html.includes("wikilink-pending")) return;
+    const div = document.createElement("div");
+    div.innerHTML = note.html;
+    div.querySelectorAll(".wikilink-pending").forEach((span) => {
+      const target = titleIndex.get((span.dataset.wikilinkTitle || "").toLowerCase());
+      if (target) {
+        const a = document.createElement("a");
+        a.href = "#";
+        a.className = "wikilink";
+        a.dataset.noteId = target.id;
+        a.textContent = span.textContent;
+        span.replaceWith(a);
+      } else {
+        span.replaceWith(document.createTextNode(span.textContent));
+      }
+    });
+    note.html = sanitizeNoteHtml(div.innerHTML);
+  });
 }
 
 document.getElementById("export-note-btn").addEventListener("click", async () => {
