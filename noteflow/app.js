@@ -6611,7 +6611,106 @@ async function initSyncFromStorage() {
   }
 }
 
-// --- Keyboard shortcuts ---
+// --- Keyboard shortcuts (customizable) ---
+// Only the global Ctrl/Cmd+<letter> shortcuts are remappable — context-only
+// ones (drawing undo/redo, table navigation) stay fixed, since making those
+// safely reassignable would mean plumbing the bindings through several
+// unrelated subsystems for comparatively little benefit.
+const SHORTCUT_DEFS = [
+  { id: "command-palette", label: "Palette de commandes", defaultKey: "k" },
+  { id: "new-note", label: "Nouvelle note (liste)", defaultKey: "n" },
+  { id: "search", label: "Rechercher", defaultKey: "f" },
+  { id: "save", label: "Sauvegarder (éditeur)", defaultKey: "s" },
+];
+const SHORTCUTS_PREF_KEY = "noteflow.shortcuts";
+
+function loadShortcutBindings() {
+  const overrides = loadPref(SHORTCUTS_PREF_KEY, {});
+  const bindings = {};
+  SHORTCUT_DEFS.forEach((d) => (bindings[d.id] = overrides[d.id] || d.defaultKey));
+  return bindings;
+}
+
+function saveShortcutBinding(id, key) {
+  const overrides = loadPref(SHORTCUTS_PREF_KEY, {});
+  overrides[id] = key;
+  savePref(SHORTCUTS_PREF_KEY, overrides);
+}
+
+// --- Keyboard shortcut settings panel ---
+const shortcutsBtn = document.getElementById("shortcuts-btn");
+const shortcutsPanel = document.getElementById("shortcuts-panel");
+const shortcutsListEl = document.getElementById("shortcuts-list");
+const isMac = navigator.platform.toLowerCase().includes("mac") || navigator.userAgent.toLowerCase().includes("mac");
+const MOD_LABEL = isMac ? "⌘" : "Ctrl";
+
+function renderShortcutsPanel() {
+  const bindings = loadShortcutBindings();
+  shortcutsListEl.innerHTML = "";
+  SHORTCUT_DEFS.forEach((def) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = def.label;
+    const keyBadge = document.createElement("kbd");
+    keyBadge.className = "shortcut-key";
+    keyBadge.textContent = `${MOD_LABEL}+${bindings[def.id].toUpperCase()}`;
+    const changeBtn = document.createElement("button");
+    changeBtn.type = "button";
+    changeBtn.className = "link-btn";
+    changeBtn.textContent = "Changer";
+    changeBtn.addEventListener("click", () => {
+      changeBtn.textContent = "Appuie sur une touche…";
+      const captureKey = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const newKey = ev.key.toLowerCase();
+        if (newKey.length !== 1 || !/[a-z0-9]/.test(newKey)) {
+          changeBtn.textContent = "Touche invalide, réessaie";
+          return;
+        }
+        const conflict = SHORTCUT_DEFS.find((d) => d.id !== def.id && loadShortcutBindings()[d.id] === newKey);
+        if (conflict) {
+          changeBtn.textContent = `Déjà utilisé par « ${conflict.label} »`;
+          return;
+        }
+        saveShortcutBinding(def.id, newKey);
+        document.removeEventListener("keydown", captureKey, true);
+        renderShortcutsPanel();
+      };
+      document.addEventListener("keydown", captureKey, true);
+    });
+    const wrap = document.createElement("div");
+    wrap.style.display = "flex";
+    wrap.style.alignItems = "center";
+    wrap.style.gap = "8px";
+    wrap.appendChild(keyBadge);
+    wrap.appendChild(changeBtn);
+    li.appendChild(label);
+    li.appendChild(wrap);
+    shortcutsListEl.appendChild(li);
+  });
+  const resetLi = document.createElement("li");
+  resetLi.className = "history-item";
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "link-btn";
+  resetBtn.textContent = "Réinitialiser tous les raccourcis";
+  resetBtn.addEventListener("click", () => {
+    localStorage.removeItem(SHORTCUTS_PREF_KEY);
+    renderShortcutsPanel();
+    showToast("Raccourcis réinitialisés");
+  });
+  resetLi.appendChild(resetBtn);
+  shortcutsListEl.appendChild(resetLi);
+}
+
+shortcutsBtn.addEventListener("click", () => {
+  const opening = shortcutsPanel.classList.contains("hidden");
+  shortcutsPanel.classList.toggle("hidden");
+  if (opening) renderShortcutsPanel();
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (!cmdkOverlay.classList.contains("hidden")) {
@@ -6628,8 +6727,9 @@ document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (!mod) return;
   const key = e.key.toLowerCase();
+  const bindings = loadShortcutBindings();
 
-  if (key === "k") {
+  if (key === bindings["command-palette"]) {
     e.preventDefault();
     if (cmdkOverlay.classList.contains("hidden")) openCommandPalette();
     else closeCommandPalette();
@@ -6637,17 +6737,19 @@ document.addEventListener("keydown", (e) => {
   }
 
   // Undo (Ctrl/Cmd+Z): an active "undo this action" toast (delete, archive,
-  // clear drawing…) always takes priority, on either screen.
+  // clear drawing…) always takes priority, on either screen. Fixed, not
+  // remappable — "Z" for undo is universal enough it's not worth the
+  // confusion of letting it be reassigned.
   if (key === "z" && !e.shiftKey && triggerToastUndo()) {
     e.preventDefault();
     return;
   }
 
   if (listScreen.classList.contains("active")) {
-    if (key === "n") {
+    if (key === bindings["new-note"]) {
       e.preventDefault();
       newNoteBtn.click();
-    } else if (key === "f") {
+    } else if (key === bindings["search"]) {
       e.preventDefault();
       searchInput.focus();
     }
@@ -6672,10 +6774,10 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (key === "s") {
+  if (key === bindings["save"]) {
     e.preventDefault();
     flushSave(false);
-  } else if (key === "f") {
+  } else if (key === bindings["search"]) {
     // Otherwise ⌘F only ever opened the browser's own find bar in the
     // editor, even though a real find/replace panel exists right there —
     // inconsistent with the list screen, where ⌘F already focuses search.

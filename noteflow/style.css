@@ -795,6 +795,16 @@ button {
   text-decoration: none;
 }
 
+.shortcut-key {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border: 1px solid var(--border);
+}
+
 .backlinks-section-header {
   font-size: 11px;
   font-weight: 700;
