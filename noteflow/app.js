@@ -655,6 +655,7 @@ importInput.addEventListener("change", async () => {
       let updated = 0;
       for (const note of imported) {
         if (!note || !note.id) continue;
+        if (note.html) note.html = sanitizeNoteHtml(note.html);
         const index = notes.findIndex((n) => n.id === note.id);
         if (index === -1) {
           notes.push(note);
@@ -917,6 +918,41 @@ function escapeHtml(str) {
   return str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Notes can arrive as HTML from three places we don't fully control: a JSON
+// import, a decrypted .noteflow packet, and a Firestore sync snapshot (from
+// whoever knows the sync code). All three get run through this before their
+// html is ever assigned via innerHTML, so a crafted "<img onerror=...>" or
+// "<script>" can't execute against the note's own author.
+const SANITIZE_DANGEROUS_TAGS = new Set(["script", "iframe", "object", "embed", "link", "meta", "style", "base", "form"]);
+
+function sanitizeNoteHtml(html) {
+  if (!html) return html;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const clean = (root) => {
+    Array.from(root.children).forEach((el) => {
+      const tag = el.tagName.toLowerCase();
+      if (SANITIZE_DANGEROUS_TAGS.has(tag)) {
+        el.remove();
+        return;
+      }
+      Array.from(el.attributes).forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        const value = attr.value.trim();
+        if (name.startsWith("on")) {
+          el.removeAttribute(attr.name);
+        } else if ((name === "href" || name === "src") && /^\s*javascript:/i.test(value)) {
+          el.removeAttribute(attr.name);
+        } else if (name === "src" && /^\s*data:(?!image\/|audio\/)/i.test(value)) {
+          el.removeAttribute(attr.name);
+        }
+      });
+      clean(el);
+    });
+  };
+  clean(doc.body);
+  return doc.body.innerHTML;
+}
+
 function highlightMatch(text, query) {
   if (!query) return escapeHtml(text);
   const idx = text.toLowerCase().indexOf(query);
@@ -1088,7 +1124,7 @@ function renderList() {
     li.innerHTML = `
       <input type="checkbox" class="note-select-checkbox" aria-label="Sélectionner cette note" />
       <span class="drag-handle" aria-hidden="true">⠿</span>
-      <div class="note-main">
+      <div class="note-main" role="button" tabindex="0">
         <div class="note-title">${badges}<span class="note-title-text"></span></div>
         <div class="note-preview"></div>
         <div class="note-meta">
@@ -1146,7 +1182,9 @@ function renderList() {
       e.stopPropagation();
       toggleSelect(note.id, li, checkbox);
     });
-    li.querySelector(".note-main").addEventListener("click", () => {
+    const noteMain = li.querySelector(".note-main");
+    noteMain.setAttribute("aria-label", note.locked ? "Note verrouillée" : note.title || "Note sans titre");
+    const openThisNote = () => {
       if (selectionMode) {
         toggleSelect(note.id, li, checkbox);
         return;
@@ -1156,6 +1194,13 @@ function renderList() {
         return;
       }
       openNote(note.id);
+    };
+    noteMain.addEventListener("click", openThisNote);
+    noteMain.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openThisNote();
+      }
     });
     li.querySelector(".note-actions").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1434,7 +1479,10 @@ function loadNoteIntoEditor() {
   titleInput.value = currentNote.title || "";
   folderInput.value = currentNote.folder || "";
   tagsInput.value = (currentNote.tags || []).join(", ");
-  textEditor.innerHTML = currentNote.html || "";
+  // Defense in depth: also sanitize right before render, in case a note
+  // already sitting in IndexedDB predates the ingestion-point sanitization
+  // (import / .noteflow / Firestore sync) added alongside this line.
+  textEditor.innerHTML = sanitizeNoteHtml(currentNote.html || "");
   refreshTransclusions();
   setPressed(pinBtn, !!currentNote.pinned);
   setLockIcon(!!currentNote.locked);
@@ -1587,8 +1635,9 @@ const TASK_PATTERNS = [
 
 document.getElementById("extract-tasks-btn").addEventListener("click", () => {
   const text = textEditor.textContent || "";
-  const sentences = text
-    .split(/(?<=[.!?\n])\s+/)
+  // No lookbehind here: it breaks script parsing (the whole file fails to
+  // load, not just this line) on Safari < 16.4 / iOS <= 16.3.
+  const sentences = (text.match(/[^.!?\n]+[.!?\n]*/g) || [])
     .map((s) => s.trim())
     .filter(Boolean);
   const found = [];
@@ -1757,7 +1806,7 @@ async function importEncryptedPacket(packet) {
     const payload = JSON.parse(await decryptString(key, packet.enc));
     const note = newNoteObject();
     note.title = payload.title || "Note importée";
-    note.html = payload.html || "";
+    note.html = sanitizeNoteHtml(payload.html || "");
     note.drawing = payload.drawing || null;
     notes.unshift(note);
     await persistNote(note);
@@ -2780,7 +2829,7 @@ function renderTransclusionBlock(el, note) {
   header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
   const body = document.createElement("div");
   body.className = "transclusion-body";
-  body.innerHTML = note.locked ? "<p><em>Cette note est verrouillée.</em></p>" : note.html || "<p><em>Note vide.</em></p>";
+  body.innerHTML = note.locked ? "<p><em>Cette note est verrouillée.</em></p>" : sanitizeNoteHtml(note.html) || "<p><em>Note vide.</em></p>";
   el.appendChild(header);
   el.appendChild(body);
 }
@@ -3615,6 +3664,10 @@ function tableDeleteColumn() {
 
 textEditor.addEventListener("change", (e) => {
   if (e.target.type === "checkbox") {
+    // The "checked" DOM property is not reflected in innerHTML, so without
+    // this the check state never survives serialization: it looked saved
+    // (the strike-through style did persist) but every box reopened empty.
+    e.target.toggleAttribute("checked", e.target.checked);
     const span = e.target.nextElementSibling;
     if (span) span.style.textDecoration = e.target.checked ? "line-through" : "none";
     scheduleSave();
@@ -3960,6 +4013,7 @@ async function handleRemoteSnapshot(snapshot) {
         await dbDelete(remote.id);
       }
     } else if (localIndex === -1 || remote.updatedAt > notes[localIndex].updatedAt) {
+      if (remote.html) remote.html = sanitizeNoteHtml(remote.html);
       if (localIndex === -1) notes.unshift(remote);
       else notes[localIndex] = remote;
       await dbPut(remote);

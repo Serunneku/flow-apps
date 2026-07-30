@@ -1999,7 +1999,8 @@ input:focus-visible,
 
 button:focus-visible,
 a:focus-visible,
-.cmdk-item:focus-visible {
+.cmdk-item:focus-visible,
+.note-main:focus-visible {
   outline: none;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 40%, transparent);
   border-radius: 8px;
