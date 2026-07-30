@@ -359,3 +359,92 @@ zéro nouveau backend.
     *Pourquoi 30K$* : c'est le genre de travail invisible et coûteux en
     temps (audit systématique, pas un simple contraste WCAG) que seules
     les équipes avec un vrai budget qualité font sans qu'on le demande.
+
+## Round 5 — Élise × Marcus (débat), 40 → 20
+
+Deux agents indépendants, chacun avec sa base de code explorée séparément et
+consigne de ne pas recouper les 60 idées déjà livrées (rounds 1-4) :
+- **Élise** (product design, confort d'usage quotidien) : 20 idées.
+- **Marcus** (power-user, organisation de connaissances complexes) : 20 idées.
+
+Fort recouvrement spontané (bon signe : les deux angles convergent sur les
+mêmes manques réels) — fusionnés en un seul point. Verdict ci-dessous.
+
+**Retenues (20)** :
+
+Améliorations :
+1. Moteur de requête dans la recherche (`tag:`, `dossier:`, `avant:`, `est:`,
+   `"phrase exacte"`, `-exclusion`) — proposé indépendamment par les deux.
+2. Palette ⌘K approfondie : recherche dans le contenu, préfixes de mode,
+   toutes les actions de l'éditeur exposées, notes récentes — proposé par
+   les deux.
+3. Historique de versions avec diff avant restauration + jalons nommés
+   épinglables — proposé par les deux.
+4. Rechercher/remplacer étendu à plusieurs notes, avec aperçu et regex —
+   proposé par les deux.
+5. Autocomplétion vivante des `[[wikilinks]]` (popup filtré + création à la
+   volée si le titre n'existe pas) — Marcus.
+6. Panneau "Notes liées" bidirectionnel (entrants + sortants + transclusions)
+   avec extrait de la phrase autour du lien — Marcus.
+7. Rappels récurrents, report ("dans 10 min"), récapitulatif des rappels
+   manqués au lancement — proposé par les deux.
+8. Checklists avec progression visible sur la carte de note + report des
+   tâches non faites vers une nouvelle note — fusion Élise/Marcus.
+9. Tableaux dignes de ce nom : tri par colonne, ligne d'en-tête, collage
+   direct d'un bloc CSV/TSV — Élise.
+10. Re-verrouillage automatique après inactivité ou mise en arrière-plan de
+    l'onglet — Élise (recoupe un vrai problème remonté par Noé, voir plus
+    bas : priorité renforcée).
+
+Nouveautés :
+11. Sommaire de note repliable (plan généré depuis les titres, navigation +
+    repli de section) — proposé par les deux.
+12. Vue côte à côte de deux notes (volet secondaire, mono-utilisateur,
+    local) — proposé par les deux.
+13. Sauvegarde automatique vers un dossier local choisi par l'utilisateur
+    (File System Access API) — proposé par les deux.
+14. Mode lecture (distinct du mode focus, qui est un mode d'écriture) —
+    Élise.
+15. Propriétés structurées de note (champs clé/valeur triables/filtrables,
+    hors du HTML) — Marcus.
+16. Notes datées / journal avec navigation calendaire ("Note du jour") —
+    Marcus.
+17. Snippets/abréviations extensibles définis par l'utilisateur — Marcus.
+18. Blocs de code (coloration à la demande) et blocs citation/avertissement
+    — Marcus.
+19. Import/export Markdown avec front-matter YAML (portabilité réelle des
+    données, cohérent avec le positionnement local-first) — fusion
+    Élise/Marcus.
+20. Tableau de bord d'hygiène du carnet (liens brisés, doublons, tags
+    orphelins, notes jamais rouvertes) — Marcus.
+
+**Rejetées ou fusionnées (20)** — rationale :
+- Vue "registre" tabulaire, bloc-requête vivant dans une note — trop proches
+  d'une base de données relationnelle, s'éloignent du carnet de notes ;
+  le sommaire de dossier existant (recherches enregistrées) couvre déjà le
+  besoin de vue filtrée.
+- Champs calculés (mini-tableur) — élargit le périmètre vers le tableur,
+  hors du cœur "notes".
+- Gestes de balayage tactile — amélioration d'interaction pure, pas une
+  fonctionnalité ; à traiter en polish plutôt qu'en round de fond.
+- Pièces jointes de fichiers quelconques, livret imprimable multi-notes,
+  tableau de bord du poids du carnet — utiles mais secondaires, fusionnées
+  conceptuellement dans le tableau de bord d'hygiène (20) qui couvre déjà
+  le diagnostic du carnet.
+- Notes vocales stockées en Blob séparé, dessin en coordonnées relatives —
+  ce sont en réalité des corrections de bugs identifiés indépendamment par
+  Noé (voir liste de bugs), pas des améliorations produit : reclassées côté
+  correctifs plutôt que backlog d'idées.
+- Reste (verrouillage du titre/tags, double volet éditable, etc.) — combiné
+  dans les items retenus les plus proches (10, 12) plutôt que dupliqué.
+
+## Chasse aux bugs — Noé
+
+Passe complète de `app.js` (4277 lignes), `index.html`, `service-worker.js`,
+`manifest.json`. 6 bugs critiques, 16 majeurs, 15 mineurs confirmés dans le
+code (pas de suppositions). Liste complète et priorisée conservée dans
+l'historique de session ; les plus critiques (XSS via note importée/
+synchronisée, service worker qui casse le hors-ligne et Firestore, liste de
+notes inaccessible au clavier, case à cocher jamais persistée, `app.js` qui
+ne parse pas sur Safari < 16.4) sont traités en priorité absolue avant toute
+nouvelle fonctionnalité.
