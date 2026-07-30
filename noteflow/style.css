@@ -2577,6 +2577,66 @@ a:focus-visible,
   color: var(--muted);
 }
 
+.journal-calendar-box {
+  max-height: none;
+  padding: 14px;
+  gap: 10px;
+}
+
+.journal-calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.journal-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.journal-cal-weekday {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+
+.journal-cal-day {
+  aspect-ratio: 1;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  position: relative;
+}
+
+.journal-cal-day:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.journal-cal-day.today {
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1.5px var(--gold);
+}
+
+.journal-cal-day.has-entry::after {
+  content: "";
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+
 /* --- Desktop layout ---
    Below ~860px the app is a full-bleed mobile screen (unchanged). Above it,
    it becomes a centered "app window" card on a soft backdrop instead of a

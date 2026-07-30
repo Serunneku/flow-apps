@@ -83,6 +83,8 @@
             <button class="menu-item" id="import-btn" type="button"><svg class="icon"><use href="#icon-upload"/></svg>Importer des notes</button>
             <button class="menu-item" id="sync-toggle" type="button"><svg class="icon"><use href="#icon-cloud"/></svg>Synchronisation</button>
             <button class="menu-item" id="local-backup-toggle" type="button"><svg class="icon"><use href="#icon-download"/></svg>Sauvegarde automatique locale</button>
+            <button class="menu-item" id="journal-today-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Note du jour</button>
+            <button class="menu-item" id="journal-calendar-btn" type="button"><svg class="icon"><use href="#icon-clock"/></svg>Calendrier du journal</button>
             <div class="menu-sep"></div>
             <button class="menu-item" id="select-mode-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Sélection multiple</button>
             <button class="menu-item" id="manage-tags-btn" type="button"><svg class="icon"><use href="#icon-star"/></svg>Gérer les tags</button>
@@ -425,6 +427,17 @@
         <button id="lock-biometric-btn" type="button" class="link-btn hidden">Empreinte / Face ID</button>
         <button id="lock-cancel-btn" type="button" class="link-btn">Retour à la liste</button>
       </div>
+    </div>
+  </div>
+
+  <div id="journal-calendar-overlay" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Calendrier du journal">
+    <div class="cmdk-box journal-calendar-box">
+      <div class="journal-calendar-header">
+        <button type="button" id="journal-cal-prev" class="icon-btn" title="Mois précédent">‹</button>
+        <span id="journal-cal-month-label"></span>
+        <button type="button" id="journal-cal-next" class="icon-btn" title="Mois suivant">›</button>
+      </div>
+      <div id="journal-cal-grid" class="journal-calendar-grid"></div>
     </div>
   </div>
 </div>

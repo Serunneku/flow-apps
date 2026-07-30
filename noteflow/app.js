@@ -1666,6 +1666,7 @@ function newNoteObject() {
     bioSalt: null,
     bioWrappedKey: null,
     properties: {},
+    journalDate: null,
     reminderAt: null,
     reminderRecur: null,
     expiresAt: null,
@@ -5243,6 +5244,82 @@ localBackupDisableBtn.addEventListener("click", async () => {
 // mean a server component this app deliberately doesn't have.
 setInterval(() => runLocalBackup(true), 30 * 60 * 1000);
 
+// --- Journal: a dated note per day, in a "Journal" folder, matched by
+// journalDate (not by title, so renaming a day's entry doesn't orphan it)
+// with a mini calendar to jump to any date and see which days have one. ---
+async function openOrCreateJournalNote(dateStr) {
+  let note = notes.find((n) => !n.deletedAt && n.journalDate === dateStr);
+  if (!note) {
+    note = newNoteObject();
+    note.journalDate = dateStr;
+    note.folder = "Journal";
+    note.title = new Date(dateStr + "T00:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    notes.unshift(note);
+    await persistNote(note);
+  }
+  showList();
+  openNote(note.id);
+}
+
+document.getElementById("journal-today-btn").addEventListener("click", () => {
+  openOrCreateJournalNote(dateKey(Date.now()));
+});
+
+const journalCalOverlay = document.getElementById("journal-calendar-overlay");
+const journalCalMonthLabel = document.getElementById("journal-cal-month-label");
+const journalCalGrid = document.getElementById("journal-cal-grid");
+let journalCalViewDate = new Date();
+
+function renderJournalCalendar() {
+  const year = journalCalViewDate.getFullYear();
+  const month = journalCalViewDate.getMonth();
+  journalCalMonthLabel.textContent = journalCalViewDate.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+  const entryDates = new Set(notes.filter((n) => !n.deletedAt && n.journalDate).map((n) => n.journalDate));
+  const firstOfMonth = new Date(year, month, 1);
+  const startWeekday = (firstOfMonth.getDay() + 6) % 7; // Monday-first
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayKey = dateKey(Date.now());
+
+  journalCalGrid.innerHTML = "";
+  ["L", "M", "M", "J", "V", "S", "D"].forEach((d) => {
+    const span = document.createElement("span");
+    span.className = "journal-cal-weekday";
+    span.textContent = d;
+    journalCalGrid.appendChild(span);
+  });
+  for (let i = 0; i < startWeekday; i++) journalCalGrid.appendChild(document.createElement("span"));
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(year, month, day);
+    const key = dateKey(d.getTime());
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "journal-cal-day" + (entryDates.has(key) ? " has-entry" : "") + (key === todayKey ? " today" : "");
+    btn.textContent = String(day);
+    btn.addEventListener("click", () => {
+      journalCalOverlay.classList.add("hidden");
+      openOrCreateJournalNote(key);
+    });
+    journalCalGrid.appendChild(btn);
+  }
+}
+
+document.getElementById("journal-calendar-btn").addEventListener("click", () => {
+  journalCalViewDate = new Date();
+  journalCalOverlay.classList.remove("hidden");
+  renderJournalCalendar();
+});
+document.getElementById("journal-cal-prev").addEventListener("click", () => {
+  journalCalViewDate.setMonth(journalCalViewDate.getMonth() - 1);
+  renderJournalCalendar();
+});
+document.getElementById("journal-cal-next").addEventListener("click", () => {
+  journalCalViewDate.setMonth(journalCalViewDate.getMonth() + 1);
+  renderJournalCalendar();
+});
+journalCalOverlay.addEventListener("click", (e) => {
+  if (e.target === journalCalOverlay) journalCalOverlay.classList.add("hidden");
+});
+
 // --- Cloud sync (Firebase, optional) ---
 const SYNC_KEYS = { config: "noteflow.sync.config", code: "noteflow.sync.code" };
 const syncToggle = document.getElementById("sync-toggle");
@@ -5583,6 +5660,7 @@ function cmdkActionItems(query) {
     { label: "Voir les archives", sub: "", action: () => { showList(); setListView("archived"); } },
     { label: "Voir la corbeille", sub: "", action: () => { showList(); setListView("trash"); } },
     { label: "Sélection multiple", sub: "Archiver / déplacer / supprimer plusieurs notes", action: () => { showList(); setSelectionMode(true); } },
+    { label: "Note du jour", sub: "Journal", action: () => document.getElementById("journal-today-btn").click() },
   ];
   // These only make sense with a note actually open — listed here instead of
   // buried in the editor's own "..." menu, since ⌘K is meant to be the one
