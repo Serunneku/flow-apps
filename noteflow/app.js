@@ -789,6 +789,23 @@ function stripHtml(html) {
   return (div.textContent || "").trim();
 }
 
+// Same caching rationale as getPreview() just below (keyed by note id, not
+// by the html string itself — an unbounded cache keyed by content would
+// just be a slower-growing version of the leak getPreview's cache used to
+// have): parsing HTML runs once per note per renderList() call otherwise
+// (every search keystroke, every 30s reminder/ephemeral tick).
+const checklistProgressCache = new Map();
+function checklistProgress(noteId, html) {
+  const cached = checklistProgressCache.get(noteId);
+  if (cached && cached.html === html) return cached.result;
+  const div = document.createElement("div");
+  div.innerHTML = html || "";
+  const boxes = div.querySelectorAll(".checklist-item input[type=checkbox]");
+  const result = { total: boxes.length, checked: Array.from(boxes).filter((b) => b.hasAttribute("checked")).length };
+  checklistProgressCache.set(noteId, { html, result });
+  return result;
+}
+
 // Parsing HTML for a text preview is the costliest part of rendering the list
 // (worse with inline base64 images); cache it per note and only recompute
 // when the note's html actually changed since the last render.
@@ -1361,6 +1378,15 @@ function renderList() {
     });
     dateEl.addEventListener("touchend", () => clearTimeout(longPressTimer));
     dateEl.addEventListener("touchmove", () => clearTimeout(longPressTimer));
+    if (!note.locked) {
+      const progress = checklistProgress(note.id, note.html);
+      if (progress.total) {
+        const chip = document.createElement("span");
+        chip.className = "note-reminder-chip checklist-progress-chip";
+        chip.innerHTML = `<svg class="icon"><use href="#icon-checklist"/></svg> ${progress.checked}/${progress.total}`;
+        li.querySelector(".note-meta").appendChild(chip);
+      }
+    }
     if (note.reminderAt && note.reminderAt > Date.now()) {
       const rem = document.createElement("span");
       rem.className = "note-reminder-chip";
@@ -1897,6 +1923,52 @@ document.getElementById("extract-tasks-btn").addEventListener("click", () => {
   scheduleSave();
   updateWordCount();
   showToast(`${found.length} tâche${found.length > 1 ? "s" : ""} extraite${found.length > 1 ? "s" : ""}`);
+});
+
+// Moves every unchecked checklist item out of this note and into a new
+// "Tâches reportées" note (checked items and everything else stay put) —
+// the natural cleanup step after a to-do list accumulates carried-over
+// items across several editing sessions.
+document.getElementById("carry-over-tasks-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour reporter ses tâches");
+    return;
+  }
+  const uncheckedItems = Array.from(textEditor.querySelectorAll(".checklist-item")).filter(
+    (li) => !li.querySelector("input[type=checkbox]").hasAttribute("checked")
+  );
+  if (!uncheckedItems.length) {
+    showToast("Aucune tâche non cochée à reporter");
+    return;
+  }
+  const tasks = uncheckedItems.map((li) => li.querySelector("span").textContent.replace(/​/g, "").trim()).filter(Boolean);
+  const emptiedLists = new Set();
+  uncheckedItems.forEach((li) => {
+    const parentUl = li.parentElement;
+    li.remove();
+    if (parentUl && parentUl.tagName === "UL" && !parentUl.children.length) emptiedLists.add(parentUl);
+  });
+  emptiedLists.forEach((ul) => ul.remove());
+
+  const target = newNoteObject();
+  target.title = `Tâches reportées — ${currentNote.title || "Sans titre"}`;
+  const ul = document.createElement("ul");
+  ul.className = "checklist";
+  tasks.forEach((task) => {
+    const li = makeChecklistLi();
+    li.querySelector("span").textContent = task;
+    ul.appendChild(li);
+  });
+  target.html = ul.outerHTML;
+  notes.unshift(target);
+  await persistNote(target);
+
+  scheduleSave();
+  updateWordCount();
+  showToast(`${tasks.length} tâche${tasks.length > 1 ? "s" : ""} reportée${tasks.length > 1 ? "s" : ""} vers une nouvelle note`, () => goToNote(target.id), {
+    actionLabel: "Ouvrir",
+    ctrlZ: false,
+  });
 });
 
 // --- Share / export a single note ---
@@ -4829,6 +4901,7 @@ async function persistNote(note) {
 
 async function removeNoteEverywhere(id) {
   previewCache.delete(id);
+  checklistProgressCache.delete(id);
   await dbDelete(id);
   if (syncDb && syncCode && !applyingRemoteChangeIds.has(id)) {
     try {
@@ -5035,6 +5108,7 @@ function cmdkActionItems(query) {
       { label: "Dupliquer la note", sub: "", action: () => duplicateNoteBtn.click() },
       { label: "Scinder par titres (H2)", sub: "", action: () => document.getElementById("split-note-btn").click() },
       { label: "Extraire les tâches", sub: "", action: () => document.getElementById("extract-tasks-btn").click() },
+      { label: "Reporter les tâches non faites", sub: "", action: () => document.getElementById("carry-over-tasks-btn").click() },
       { label: "Exporter cette note", sub: "JSON", action: () => document.getElementById("export-note-btn").click() },
       { label: "Mode dessin & surlignage", sub: "", action: () => modeDrawBtn.click() },
       { label: "Mode focus", sub: "", action: () => focusBtn.click() },
