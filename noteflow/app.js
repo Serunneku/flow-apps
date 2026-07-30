@@ -5898,12 +5898,18 @@ journalCalOverlay.addEventListener("click", (e) => {
 });
 
 // --- Cloud sync (Firebase, optional) ---
-const SYNC_KEYS = { config: "noteflow.sync.config", code: "noteflow.sync.code" };
+// End-to-end encrypted: every note is encrypted on this device, with a key
+// derived from a passphrase that is NEVER sent to Firebase, before it ever
+// leaves for the sync collection. Firebase (and anyone with read access to
+// the project) only ever sees ciphertext + an id + a timestamp — it cannot
+// read note content, not even us.
+const SYNC_KEYS = { config: "noteflow.sync.config", code: "noteflow.sync.code", e2eeSalt: "noteflow.sync.e2eeSalt" };
 const syncToggle = document.getElementById("sync-toggle");
 const syncPanel = document.getElementById("sync-panel");
 const syncStatusEl = document.getElementById("sync-status");
 const syncConfigInput = document.getElementById("sync-config-input");
 const syncCodeInput = document.getElementById("sync-code-input");
+const syncPassphraseInput = document.getElementById("sync-passphrase-input");
 const syncSaveBtn = document.getElementById("sync-save-btn");
 const syncDisableBtn = document.getElementById("sync-disable-btn");
 
@@ -5911,6 +5917,22 @@ let syncDb = null;
 let syncCode = "";
 let syncFns = null;
 let unsubscribeSnapshot = null;
+// The derived AES-GCM key lives only in memory, for this session — the
+// passphrase itself is never persisted anywhere, so it has to be re-entered
+// once per browser session (a deliberate trade-off: convenience vs. genuine
+// end-to-end confidentiality).
+let syncEncryptionKey = null;
+
+async function encryptNoteForSync(note) {
+  const plaintext = JSON.stringify(note);
+  const blob = await encryptString(syncEncryptionKey, plaintext);
+  return { id: note.id, updatedAt: note.updatedAt, deletedMarker: false, e2ee: true, blob };
+}
+
+async function decryptNoteFromSync(remote) {
+  const plaintext = await decryptString(syncEncryptionKey, remote.blob);
+  return JSON.parse(plaintext);
+}
 // A Set of note ids, not a single flag: a global boolean meant that any
 // local edit autosaved during the awaits inside handleRemoteSnapshot (typing
 // in an unrelated note while a snapshot for a different note was still
@@ -5936,9 +5958,19 @@ async function loadFirebase() {
   return { ...appMod, ...authMod, ...storeMod };
 }
 
-async function startSync(config, code) {
+async function startSync(config, code, passphrase) {
   try {
     setSyncStatus("Connexion…");
+    let saltB64 = loadPref(SYNC_KEYS.e2eeSalt, null);
+    let saltBytes;
+    if (saltB64) {
+      saltBytes = b64ToBytes(saltB64);
+    } else {
+      saltBytes = crypto.getRandomValues(new Uint8Array(16));
+      savePref(SYNC_KEYS.e2eeSalt, bytesToB64(saltBytes));
+    }
+    syncEncryptionKey = await deriveKey(passphrase, saltBytes);
+
     const fb = await loadFirebase();
     if (unsubscribeSnapshot) {
       unsubscribeSnapshot();
@@ -5958,23 +5990,27 @@ async function startSync(config, code) {
       (snapshot) => handleRemoteSnapshot(snapshot),
       (err) => setSyncStatus("🔴 Erreur de synchronisation : " + err.message)
     );
-    setSyncStatus("🟢 Synchronisation active");
+    setSyncStatus("🟢 Synchronisation active (chiffrée de bout en bout)");
   } catch (err) {
     setSyncStatus("🔴 Erreur : " + err.message);
   }
 }
 
 async function handleRemoteSnapshot(snapshot) {
+  if (!syncEncryptionKey) {
+    setSyncStatus("🟡 Synchronisation chiffrée : entre ta phrase secrète pour déchiffrer");
+    return;
+  }
   for (const change of snapshot.docChanges()) {
-    const remote = change.doc.data();
-    applyingRemoteChangeIds.add(remote.id);
-    const localIndex = notes.findIndex((n) => n.id === remote.id);
+    const encryptedRemote = change.doc.data();
+    applyingRemoteChangeIds.add(encryptedRemote.id);
+    const localIndex = notes.findIndex((n) => n.id === encryptedRemote.id);
     if (change.type === "removed") {
       if (localIndex !== -1) {
         notes.splice(localIndex, 1);
-        await dbDelete(remote.id);
+        await dbDelete(encryptedRemote.id);
       }
-    } else if (localIndex === -1 || remote.updatedAt > notes[localIndex].updatedAt) {
+    } else if (localIndex === -1 || encryptedRemote.updatedAt > notes[localIndex].updatedAt) {
       // Never apply a remote snapshot over a note with an unsaved edit still
       // pending (autosave debounce in flight): replacing textEditor.innerHTML
       // mid-keystroke jumps the caret to the start and can drop the current
@@ -5983,8 +6019,18 @@ async function handleRemoteSnapshot(snapshot) {
       // here is safe — the pending flush stamps its own updatedAt = now, so
       // it will win the comparison above on the *next* remote snapshot and
       // push the local edit back out once the user is done typing.
-      if (currentNote && currentNote.id === remote.id && editorScreen.classList.contains("active") && saveTimer) {
-        applyingRemoteChangeIds.delete(remote.id);
+      if (currentNote && currentNote.id === encryptedRemote.id && editorScreen.classList.contains("active") && saveTimer) {
+        applyingRemoteChangeIds.delete(encryptedRemote.id);
+        continue;
+      }
+      let remote;
+      try {
+        remote = encryptedRemote.e2ee ? await decryptNoteFromSync(encryptedRemote) : encryptedRemote;
+      } catch {
+        // Wrong passphrase (or a device that used a different one) produces
+        // undecryptable ciphertext — skip rather than crash the whole sync
+        // listener on one bad document.
+        applyingRemoteChangeIds.delete(encryptedRemote.id);
         continue;
       }
       if (remote.html) remote.html = sanitizeNoteHtml(remote.html);
@@ -5996,9 +6042,10 @@ async function handleRemoteSnapshot(snapshot) {
         loadNoteIntoEditor();
       }
     }
-    applyingRemoteChangeIds.delete(remote.id);
+    applyingRemoteChangeIds.delete(encryptedRemote.id);
   }
   if (listScreen.classList.contains("active")) renderList();
+  setSyncStatus("🟢 Synchronisation active (chiffrée de bout en bout)");
 }
 
 async function persistNote(note) {
@@ -6017,9 +6064,10 @@ async function persistNote(note) {
   }
   try {
     await dbPut(note);
-    if (syncDb && syncCode && !applyingRemoteChangeIds.has(note.id)) {
+    if (syncDb && syncCode && syncEncryptionKey && !applyingRemoteChangeIds.has(note.id)) {
       try {
-        await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), note);
+        const payload = await encryptNoteForSync(note);
+        await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), payload);
       } catch (err) {
         console.warn("sync push failed", err);
       }
@@ -6064,9 +6112,15 @@ syncSaveBtn.addEventListener("click", async () => {
     setSyncStatus("🔴 Indique un code de synchronisation");
     return;
   }
+  const passphrase = syncPassphraseInput.value;
+  if (!passphrase) {
+    setSyncStatus("🔴 La phrase secrète de chiffrement est requise");
+    return;
+  }
   savePref(SYNC_KEYS.config, config);
   savePref(SYNC_KEYS.code, code);
-  await startSync(config, code);
+  syncPassphraseInput.value = "";
+  await startSync(config, code, passphrase);
 });
 
 syncDisableBtn.addEventListener("click", () => {
@@ -6078,19 +6132,26 @@ syncDisableBtn.addEventListener("click", () => {
   // mid-remote-application.
   unsubscribeSnapshot = null;
   syncFns = null;
+  syncEncryptionKey = null;
   applyingRemoteChangeIds.clear();
   syncDb = null;
   syncCode = "";
   setSyncStatus("Synchronisation non configurée");
 });
 
+// The passphrase is never persisted, so a fresh page load can restore the
+// Firebase config/code automatically but can't restore the encryption key —
+// the user has to re-enter it once per session before sync actually
+// resumes exchanging data (the alternative, storing the key or passphrase
+// on disk, would defeat the point of end-to-end encryption).
 async function initSyncFromStorage() {
   const config = loadPref(SYNC_KEYS.config, null);
   const code = loadPref(SYNC_KEYS.code, "");
   if (config && code) {
     syncConfigInput.value = JSON.stringify(config, null, 2);
     syncCodeInput.value = code;
-    await startSync(config, code);
+    syncPanel.classList.remove("hidden");
+    setSyncStatus("🟡 Synchronisation configurée : entre ta phrase secrète et clique « Activer » pour reprendre");
   }
 }
 

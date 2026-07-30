@@ -124,6 +124,10 @@
       <label class="sync-label">Code de synchronisation (le même sur tous tes appareils)
         <input id="sync-code-input" type="text" class="sync-code-input" placeholder="ex: mon-code-secret-123" autocomplete="off" />
       </label>
+      <label class="sync-label">Phrase secrète de chiffrement (jamais envoyée à Firebase, la même sur tous tes appareils)
+        <input id="sync-passphrase-input" type="password" class="sync-code-input" placeholder="Phrase secrète E2EE" autocomplete="off" />
+      </label>
+      <p class="panel-hint">Tes notes sont chiffrées sur cet appareil avant d'être envoyées : Firebase ne voit jamais leur contenu en clair. Sans cette phrase, personne (y compris nous) ne peut les lire.</p>
       <div class="sync-actions">
         <button id="sync-save-btn" type="button">Activer la synchronisation</button>
         <button id="sync-disable-btn" type="button" class="link-btn">Désactiver</button>
