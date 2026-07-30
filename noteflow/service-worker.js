@@ -1,4 +1,4 @@
-const CACHE_NAME = "noteflow-v11";
+const CACHE_NAME = "noteflow-v12";
 const ASSETS = ["./", "./index.html", "./style.css", "./app.js", "./manifest.json"];
 
 self.addEventListener("install", (event) => {
@@ -50,6 +50,24 @@ self.addEventListener("fetch", (event) => {
       const fresh = await network;
       if (fresh) return fresh;
       return isNavigation ? cache.match("./index.html") : Response.error();
+    })
+  );
+});
+
+// The "Dans 10 min" action button on a reminder notification (see
+// notifyReminder() in app.js) needs a click handler here — a notification
+// created via ServiceWorkerRegistration.showNotification() has no other way
+// to hand its action back to the app.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const noteId = event.notification.data && event.notification.data.noteId;
+  event.waitUntil(
+    self.clients.matchAll({ type: "window" }).then((clients) => {
+      if (event.action === "snooze" && noteId) {
+        clients.forEach((c) => c.postMessage({ type: "noteflow-snooze-reminder", noteId }));
+      } else if (clients.length) {
+        clients[0].focus();
+      }
     })
   );
 });

@@ -1630,6 +1630,7 @@ function newNoteObject() {
     bioSalt: null,
     bioWrappedKey: null,
     reminderAt: null,
+    reminderRecur: null,
     expiresAt: null,
     reminderFired: false,
     history: [],
@@ -1728,6 +1729,7 @@ function loadNoteIntoEditor() {
   paperPanel.classList.add("hidden");
   findPanel.classList.add("hidden");
   reminderInput.value = currentNote.reminderAt ? toLocalDatetimeValue(currentNote.reminderAt) : "";
+  reminderRecurSelect.value = currentNote.reminderRecur || "";
   editorScreen.classList.remove("focus-mode");
   stopAmbientFocusSound();
   notePage.style.backgroundColor = currentNote.color || "";
@@ -2682,6 +2684,7 @@ lockBtn.addEventListener("click", async () => {
 const reminderBtn = document.getElementById("reminder-btn");
 const reminderPanel = document.getElementById("reminder-panel");
 const reminderInput = document.getElementById("reminder-input");
+const reminderRecurSelect = document.getElementById("reminder-recur-select");
 const reminderSaveBtn = document.getElementById("reminder-save-btn");
 const reminderClearBtn = document.getElementById("reminder-clear-btn");
 
@@ -2702,6 +2705,7 @@ reminderSaveBtn.addEventListener("click", () => {
     Notification.requestPermission();
   }
   currentNote.reminderAt = new Date(reminderInput.value).getTime();
+  currentNote.reminderRecur = reminderRecurSelect.value || null;
   currentNote.reminderFired = false;
   scheduleSave();
   reminderPanel.classList.add("hidden");
@@ -2710,18 +2714,48 @@ reminderSaveBtn.addEventListener("click", () => {
 
 reminderClearBtn.addEventListener("click", () => {
   currentNote.reminderAt = null;
+  currentNote.reminderRecur = null;
   currentNote.reminderFired = false;
   reminderInput.value = "";
+  reminderRecurSelect.value = "";
   scheduleSave();
   reminderPanel.classList.add("hidden");
   showToast("Rappel supprimé");
 });
 
+function nextRecurrence(ts, recur) {
+  const d = new Date(ts);
+  if (recur === "daily") d.setDate(d.getDate() + 1);
+  else if (recur === "weekly") d.setDate(d.getDate() + 7);
+  else if (recur === "monthly") d.setMonth(d.getMonth() + 1);
+  return d.getTime();
+}
+
+function snoozeReminder(noteId, minutes) {
+  const note = notes.find((n) => n.id === noteId);
+  if (!note) return;
+  note.reminderAt = Date.now() + minutes * 60000;
+  note.reminderFired = false;
+  persistNote(note);
+  if (currentNote && currentNote.id === noteId) {
+    reminderInput.value = toLocalDatetimeValue(note.reminderAt);
+  }
+  if (listScreen.classList.contains("active")) renderList();
+}
+
+navigator.serviceWorker &&
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "noteflow-snooze-reminder" && event.data.noteId) {
+      snoozeReminder(event.data.noteId, 10);
+      showToast("Rappel reporté de 10 minutes");
+    }
+  });
+
 function notifyReminder(note) {
   const title = note.title || "Rappel NoteFlow";
   const body = "Touche pour ouvrir ta note.";
   if (!("Notification" in window) || Notification.permission !== "granted") {
-    showToast(`Rappel : ${note.title || "Sans titre"}`);
+    showToast(`Rappel : ${note.title || "Sans titre"}`, () => snoozeReminder(note.id, 10), { actionLabel: "Dans 10 min", ctrlZ: false });
     return;
   }
   // Chrome on Android (and so any Chromium-based installed PWA there) throws
@@ -2731,7 +2765,7 @@ function notifyReminder(note) {
   // due that tick (each had already been marked reminderFired first).
   if (navigator.serviceWorker) {
     navigator.serviceWorker.ready
-      .then((reg) => reg.showNotification(title, { body }))
+      .then((reg) => reg.showNotification(title, { body, data: { noteId: note.id }, actions: [{ action: "snooze", title: "Dans 10 min" }] }))
       .catch(() => showToast(`Rappel : ${note.title || "Sans titre"}`));
     return;
   }
@@ -2746,13 +2780,35 @@ setInterval(() => {
   const now = Date.now();
   notes.forEach((note) => {
     if (note.reminderAt && !note.reminderFired && note.reminderAt <= now) {
-      note.reminderFired = true;
+      if (note.reminderRecur) {
+        note.reminderAt = nextRecurrence(note.reminderAt, note.reminderRecur);
+      } else {
+        note.reminderFired = true;
+      }
       persistNote(note);
       notifyReminder(note);
       if (listScreen.classList.contains("active")) renderList();
     }
   });
 }, 30000);
+
+// A reminder due while the app was closed entirely never got a chance to
+// fire (the interval above only runs while a tab is open) — surfaced once
+// as a single recap at boot instead of scattering separate notifications
+// for however many piled up, or silently losing track of them.
+function summarizeMissedReminders() {
+  const now = Date.now();
+  const missed = notes.filter((n) => !n.deletedAt && n.reminderAt && !n.reminderFired && n.reminderAt <= now);
+  if (!missed.length) return;
+  missed.forEach((note) => {
+    if (note.reminderRecur) note.reminderAt = nextRecurrence(note.reminderAt, note.reminderRecur);
+    else note.reminderFired = true;
+    persistNote(note);
+  });
+  const names = missed.slice(0, 3).map((n) => n.title || "Sans titre").join(", ");
+  const extra = missed.length > 3 ? ` et ${missed.length - 3} autre(s)` : "";
+  showToast(`Rappel${missed.length > 1 ? "s" : ""} manqué${missed.length > 1 ? "s" : ""} : ${names}${extra}`);
+}
 
 // --- Ephemeral notes: a self-destruct timer, distinct from reminders — the
 // note quietly moves itself to the trash once the delay is up (the 30-day
@@ -5143,6 +5199,7 @@ async function handleIncomingShare() {
   }
   showList();
   await handleIncomingShare();
+  summarizeMissedReminders();
   initSyncFromStorage();
 })();
 

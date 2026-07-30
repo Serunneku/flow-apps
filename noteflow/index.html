@@ -190,6 +190,14 @@
       <label class="sync-label">Me rappeler cette note
         <input id="reminder-input" type="datetime-local" class="sync-code-input" />
       </label>
+      <label class="sync-label">Récurrence
+        <select id="reminder-recur-select">
+          <option value="">Aucune</option>
+          <option value="daily">Chaque jour</option>
+          <option value="weekly">Chaque semaine</option>
+          <option value="monthly">Chaque mois</option>
+        </select>
+      </label>
       <p class="panel-hint">Le rappel ne se déclenche que si NoteFlow est ouvert dans un onglet (pas de notification en arrière-plan).</p>
       <div class="sync-actions">
         <button id="reminder-save-btn" type="button">Définir le rappel</button>
