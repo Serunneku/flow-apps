@@ -2298,6 +2298,39 @@ a:focus-visible,
   background: var(--accent);
 }
 
+.wikilink-autocomplete {
+  position: absolute;
+  z-index: 20;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-hover);
+}
+
+.wikilink-autocomplete-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.wikilink-autocomplete-item.active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.wikilink-autocomplete-item.create {
+  color: var(--gold-ink);
+  font-weight: 600;
+}
+
 .cmdk-item.active .cmdk-item-label,
 .cmdk-item.active .cmdk-item-sub {
   color: var(--accent-text);

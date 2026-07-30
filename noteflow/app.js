@@ -3145,7 +3145,97 @@ textEditor.addEventListener("input", () => {
   sel.addRange(r);
 });
 
-// --- Wikilinks: typing [[Titre]] turns into a clickable link to that note ---
+// --- Wikilinks: typing [[Titre]] turns into a clickable link to that note.
+// A live popup also opens right after "[[" and filters as you type, with
+// arrow keys + Enter to pick — including a "Créer la note…" entry when
+// nothing matches, instead of silently doing nothing until you finish
+// typing an exact, pre-existing title. ---
+const wikilinkAutocompleteEl = document.getElementById("wikilink-autocomplete");
+let wikilinkAcItems = [];
+let wikilinkAcIndex = 0;
+let wikilinkAcRange = null; // { node, start, end } spanning "[[query" (no closing "]]")
+
+function closeWikilinkAutocomplete() {
+  wikilinkAutocompleteEl.classList.add("hidden");
+  wikilinkAcItems = [];
+  wikilinkAcRange = null;
+}
+
+function insertWikilinkAt(node, start, end, target) {
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  range.deleteContents();
+  const a = document.createElement("a");
+  a.href = "#";
+  a.className = "wikilink";
+  a.dataset.noteId = target.id;
+  a.textContent = target.title || "Sans titre";
+  range.insertNode(a);
+  const spacer = document.createTextNode("​");
+  a.parentNode.insertBefore(spacer, a.nextSibling);
+  const sel = window.getSelection();
+  range.setStart(spacer, 1);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  scheduleSave();
+}
+
+async function chooseWikilinkAutocomplete(index) {
+  if (!wikilinkAcRange || !wikilinkAcItems[index]) return;
+  const { node, start, end } = wikilinkAcRange;
+  const item = wikilinkAcItems[index];
+  let target = item.note;
+  if (item.create) {
+    target = newNoteObject();
+    target.title = item.title;
+    notes.push(target);
+    await persistNote(target);
+  }
+  closeWikilinkAutocomplete();
+  insertWikilinkAt(node, start, end, target);
+}
+
+function renderWikilinkAutocomplete(node, start, query) {
+  const q = query.trim().toLowerCase();
+  const matches = notes
+    .filter((n) => !n.deletedAt && n.id !== currentNote.id)
+    .filter((n) => !q || (n.title || "").toLowerCase().includes(q))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 6)
+    .map((n) => ({ note: n, label: n.title || "Sans titre" }));
+  wikilinkAcItems = matches;
+  const hasExact = matches.some((m) => (m.note.title || "").toLowerCase() === q);
+  if (q && !hasExact) wikilinkAcItems = [...matches, { create: true, title: query.trim(), label: `Créer la note « ${query.trim()} »` }];
+  if (!wikilinkAcItems.length) {
+    closeWikilinkAutocomplete();
+    return;
+  }
+  wikilinkAcIndex = 0;
+  wikilinkAcRange = { node, start, end: start + 2 + query.length };
+  wikilinkAutocompleteEl.innerHTML = "";
+  wikilinkAcItems.forEach((item, i) => {
+    const li = document.createElement("li");
+    li.className = "wikilink-autocomplete-item" + (item.create ? " create" : "") + (i === 0 ? " active" : "");
+    li.setAttribute("role", "option");
+    li.textContent = item.label;
+    li.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      chooseWikilinkAutocomplete(i);
+    });
+    wikilinkAutocompleteEl.appendChild(li);
+  });
+  wikilinkAutocompleteEl.classList.remove("hidden");
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.collapse(true);
+  const rect = range.getBoundingClientRect();
+  const pageRect = notePage.getBoundingClientRect();
+  wikilinkAutocompleteEl.style.left = `${rect.left - pageRect.left}px`;
+  wikilinkAutocompleteEl.style.top = `${rect.bottom - pageRect.top + 4}px`;
+}
+
 textEditor.addEventListener("input", () => {
   const sel = window.getSelection();
   if (!sel.rangeCount || !sel.isCollapsed) return;
@@ -3153,38 +3243,45 @@ textEditor.addEventListener("input", () => {
   if (node.nodeType !== 3) return;
   const offset = sel.getRangeAt(0).startOffset;
   const text = node.textContent.slice(0, offset);
-  const match = text.match(/\[\[([^[\]]+)\]\]$/);
-  if (!match) return;
-  // A leading "!" (![[Titre]]) is transclusion, handled by a separate
-  // listener below — this one only handles a plain wikilink.
-  if (text[text.length - match[0].length - 1] === "!") return;
-  const query = match[1].trim().toLowerCase();
-  if (!query) return;
-  const target =
-    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
-    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
-  if (!target) return;
-  const full = match[0];
-  const range = document.createRange();
-  try {
-    range.setStart(node, offset - full.length);
-    range.setEnd(node, offset);
-    range.deleteContents();
-    const a = document.createElement("a");
-    a.href = "#";
-    a.className = "wikilink";
-    a.dataset.noteId = target.id;
-    a.textContent = target.title || "Sans titre";
-    range.insertNode(a);
-    const spacer = document.createTextNode("​");
-    a.parentNode.insertBefore(spacer, a.nextSibling);
-    range.setStart(spacer, 1);
-    range.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    scheduleSave();
-  } catch {
-    /* selection edge case: skip silently */
+
+  const closedMatch = text.match(/\[\[([^[\]]+)\]\]$/);
+  if (closedMatch && text[text.length - closedMatch[0].length - 1] !== "!") {
+    closeWikilinkAutocomplete();
+    const query = closedMatch[1].trim().toLowerCase();
+    if (!query) return;
+    const target =
+      notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+      notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+    if (!target) return;
+    insertWikilinkAt(node, offset - closedMatch[0].length, offset, target);
+    return;
+  }
+
+  const openMatch = text.match(/(?:^|[^!])\[\[([^[\]]*)$/);
+  if (openMatch) {
+    const bracketStart = text.lastIndexOf("[[");
+    renderWikilinkAutocomplete(node, bracketStart, openMatch[1]);
+  } else {
+    closeWikilinkAutocomplete();
+  }
+});
+
+textEditor.addEventListener("keydown", (e) => {
+  if (wikilinkAutocompleteEl.classList.contains("hidden")) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    wikilinkAcIndex = Math.min(wikilinkAcIndex + 1, wikilinkAcItems.length - 1);
+    wikilinkAutocompleteEl.querySelectorAll(".wikilink-autocomplete-item").forEach((li, i) => li.classList.toggle("active", i === wikilinkAcIndex));
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    wikilinkAcIndex = Math.max(wikilinkAcIndex - 1, 0);
+    wikilinkAutocompleteEl.querySelectorAll(".wikilink-autocomplete-item").forEach((li, i) => li.classList.toggle("active", i === wikilinkAcIndex));
+  } else if (e.key === "Enter" || e.key === "Tab") {
+    e.preventDefault();
+    chooseWikilinkAutocomplete(wikilinkAcIndex);
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeWikilinkAutocomplete();
   }
 });
 
