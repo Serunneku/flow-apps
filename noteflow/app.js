@@ -1211,12 +1211,77 @@ guardDoubleClick(document.getElementById("sel-move-btn"), async () => {
   setSelectionMode(false);
 });
 
+// A small search-query language on top of plain substring search:
+// tag:travail, dossier:Travail/Projets (also matches subfolders), est:verrouillée
+// / archivée / épinglée, avant:2026-01-01 / apres:2026-01-01, "exact phrase",
+// and a leading "-" negates any of the above. Anything left over after
+// pulling these out is still free-text, ANDed with the rest — so a plain
+// search like before ("facture avril") keeps working exactly the same.
+const SEARCH_OP_ALIASES = { folder: "dossier" };
+function parseSearchQuery(raw) {
+  const tokens = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(raw))) tokens.push(m[1] !== undefined ? m[1] : m[2]);
+  return tokens
+    .map((tok) => {
+      let text = tok;
+      let negate = false;
+      if (text.startsWith("-") && text.length > 1) {
+        negate = true;
+        text = text.slice(1);
+      }
+      const opMatch = /^(tag|dossier|folder|avant|apres|après|est):(.+)$/i.exec(text);
+      if (opMatch) {
+        let op = opMatch[1].toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+        op = SEARCH_OP_ALIASES[op] || op;
+        return { negate, op, value: opMatch[2].toLowerCase() };
+      }
+      return { negate, text: text.toLowerCase() };
+    })
+    .filter((c) => c.op || c.text);
+}
+
+function noteHaystack(note) {
+  return (note.title + " " + (note.folder || "") + " " + (note.tags || []).join(" ") + " " + (note.locked ? "" : getPreview(note))).toLowerCase();
+}
+
+function clauseMatches(note, clause) {
+  if (clause.op === "tag") return (note.tags || []).some((t) => t.toLowerCase() === clause.value);
+  if (clause.op === "dossier") return (note.folder || "").toLowerCase().startsWith(clause.value);
+  if (clause.op === "avant" || clause.op === "apres") {
+    const d = Date.parse(clause.value);
+    if (Number.isNaN(d)) return false;
+    return clause.op === "avant" ? note.updatedAt < d : note.updatedAt > d;
+  }
+  if (clause.op === "est") {
+    const v = clause.value.normalize("NFD").replace(/[̀-ͯ]/g, "");
+    if (v.startsWith("verrouill")) return !!note.locked;
+    if (v.startsWith("archiv")) return !!note.archived;
+    if (v.startsWith("epingl")) return !!note.pinned;
+    return false;
+  }
+  return noteHaystack(note).includes(clause.text);
+}
+
+function noteMatchesQuery(note, clauses) {
+  return clauses.every((c) => (c.negate ? !clauseMatches(note, c) : clauseMatches(note, c)));
+}
+
 function renderList() {
   notesListEl.classList.toggle("selection-mode", selectionMode);
   if (selectionMode) updateSelectionCount();
   renderFolderFilters();
   renderSavedSearchChips();
-  const query = searchQuery.trim().toLowerCase();
+  const query = searchQuery.trim();
+  const queryClauses = query ? parseSearchQuery(query) : [];
+  // Highlighting only makes sense for the free-text part of the query — a
+  // "tag:travail" or "est:archivée" clause has nothing literal to underline.
+  const highlightTerm = queryClauses
+    .filter((c) => !c.op && !c.negate)
+    .map((c) => c.text)
+    .join(" ")
+    .trim();
   let visible = notes.filter((n) => {
     if (listView === "trash" && !n.deletedAt) return false;
     if (listView === "archived" && (!n.archived || n.deletedAt)) return false;
@@ -1228,18 +1293,7 @@ function renderList() {
     )
       return false;
     if (activeTagFilter && !(n.tags || []).includes(activeTagFilter)) return false;
-    if (query) {
-      const haystack = (
-        n.title +
-        " " +
-        (n.folder || "") +
-        " " +
-        (n.tags || []).join(" ") +
-        " " +
-        (n.locked ? "" : getPreview(n))
-      ).toLowerCase();
-      if (!haystack.includes(query)) return false;
-    }
+    if (queryClauses.length && !noteMatchesQuery(n, queryClauses)) return false;
     return true;
   });
 
@@ -1295,8 +1349,8 @@ function renderList() {
       <div class="note-actions">${actions}</div>
     `;
     if (note.color) li.style.backgroundColor = note.color;
-    li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", query);
-    li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, query);
+    li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", highlightTerm);
+    li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, highlightTerm);
     const dateEl = li.querySelector(".note-date");
     dateEl.textContent = timeAgo(note.updatedAt);
     const exactDate = new Date(note.updatedAt).toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" });
