@@ -70,6 +70,7 @@ const PREF_KEYS = {
   savedSearches: "noteflow.savedSearches",
   thickInk: "noteflow.thickInk",
   folderCovers: "noteflow.folderCovers",
+  snippets: "noteflow.snippets",
 };
 const loadPref = (key, fallback) => {
   try {
@@ -941,6 +942,72 @@ function renderTagManager() {
     tagManagerListEl.appendChild(li);
   });
 }
+
+// --- Snippets: user-defined trigger -> expansion pairs, expanded live while
+// typing (trigger followed by a space or Enter). "$|" in the expansion text
+// marks a single cursor placement after expansion — a lighter-weight
+// alternative to full multi-tabstop snippet engines, chosen because the
+// editor's contenteditable model has no native concept of linked tabstops
+// to build that on top of without a much larger rewrite. ---
+const snippetManagerBtn = document.getElementById("manage-snippets-btn");
+const snippetManagerPanel = document.getElementById("snippet-manager-panel");
+const snippetManagerListEl = document.getElementById("snippet-manager-list");
+const snippetTriggerInput = document.getElementById("snippet-trigger-input");
+const snippetExpansionInput = document.getElementById("snippet-expansion-input");
+const snippetAddBtn = document.getElementById("snippet-add-btn");
+
+function loadSnippets() {
+  return loadPref(PREF_KEYS.snippets, []);
+}
+function saveSnippets(list) {
+  savePref(PREF_KEYS.snippets, list);
+}
+
+function renderSnippetManager() {
+  const snippets = loadSnippets();
+  snippetManagerListEl.innerHTML = "";
+  if (!snippets.length) {
+    snippetManagerListEl.innerHTML = '<li class="history-empty">Aucune abréviation pour l\'instant.</li>';
+    return;
+  }
+  snippets.forEach((s, i) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = `${s.trigger} → ${s.expansion}`;
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "link-btn danger";
+    deleteBtn.textContent = "Supprimer";
+    deleteBtn.addEventListener("click", () => {
+      const list = loadSnippets();
+      list.splice(i, 1);
+      saveSnippets(list);
+      renderSnippetManager();
+    });
+    li.appendChild(label);
+    li.appendChild(deleteBtn);
+    snippetManagerListEl.appendChild(li);
+  });
+}
+
+snippetManagerBtn.addEventListener("click", () => {
+  const opening = snippetManagerPanel.classList.contains("hidden");
+  snippetManagerPanel.classList.toggle("hidden");
+  if (opening) renderSnippetManager();
+});
+
+snippetAddBtn.addEventListener("click", () => {
+  const trigger = snippetTriggerInput.value.trim();
+  const expansion = snippetExpansionInput.value.trim();
+  if (!trigger || !expansion) return;
+  const list = loadSnippets().filter((s) => s.trigger !== trigger);
+  list.push({ trigger, expansion });
+  saveSnippets(list);
+  snippetTriggerInput.value = "";
+  snippetExpansionInput.value = "";
+  renderSnippetManager();
+});
 
 // newTag === null removes the tag entirely (used by the "Supprimer" action);
 // otherwise renaming onto an existing tag merges the two automatically,
@@ -2418,6 +2485,40 @@ propertiesInput.addEventListener("keydown", (e) => {
 textEditor.addEventListener("input", () => {
   scheduleSave();
   updateWordCount();
+});
+
+textEditor.addEventListener("input", (e) => {
+  if (e.data !== " " && e.inputType !== "insertParagraph" && e.inputType !== "insertLineBreak") return;
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return;
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) return;
+  const offset = sel.getRangeAt(0).startOffset;
+  const before = node.textContent.slice(0, offset);
+  // Chrome's contenteditable silently turns a typed space into a non-breaking
+  // space (U+00A0) rather than U+0020 in some caret positions — a plain " "
+  // in the character class below would then never match.
+  const match = before.match(/(\S+)[  \n]$/);
+  if (!match) return;
+  const trigger = match[1];
+  const snippet = loadSnippets().find((s) => s.trigger === trigger);
+  if (!snippet) return;
+  const cursorMarker = "$|";
+  const cursorIndex = snippet.expansion.indexOf(cursorMarker);
+  const expansionText = cursorIndex === -1 ? snippet.expansion : snippet.expansion.replace(cursorMarker, "");
+  const range = document.createRange();
+  range.setStart(node, offset - match[0].length);
+  range.setEnd(node, offset);
+  range.deleteContents();
+  const textNode = document.createTextNode(expansionText + " ");
+  range.insertNode(textNode);
+  const caretPos = cursorIndex === -1 ? textNode.length : cursorIndex;
+  const newRange = document.createRange();
+  newRange.setStart(textNode, Math.min(caretPos, textNode.length));
+  newRange.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(newRange);
+  scheduleSave();
 });
 
 let lastKeystrokeTime = 0;

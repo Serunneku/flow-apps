@@ -88,6 +88,7 @@
             <div class="menu-sep"></div>
             <button class="menu-item" id="select-mode-btn" type="button"><svg class="icon"><use href="#icon-checklist"/></svg>Sélection multiple</button>
             <button class="menu-item" id="manage-tags-btn" type="button"><svg class="icon"><use href="#icon-star"/></svg>Gérer les tags</button>
+            <button class="menu-item" id="manage-snippets-btn" type="button"><svg class="icon"><use href="#icon-pencil"/></svg>Abréviations</button>
             <button class="menu-item" id="sound-toggle-btn" type="button"><svg class="icon"><use href="#icon-sound"/></svg>Sons</button>
             <button class="menu-item" id="contrast-toggle-btn" type="button"><svg class="icon"><use href="#icon-contrast"/></svg>Contraste renforcé</button>
             <div class="menu-sep"></div>
@@ -142,6 +143,17 @@
       <p class="sync-status">Gérer les tags</p>
       <ul id="tag-manager-list" class="history-list"></ul>
       <p class="panel-hint">Renommer un tag vers un tag déjà existant les fusionne en un seul.</p>
+    </div>
+
+    <div id="snippet-manager-panel" class="side-panel hidden">
+      <p class="sync-status">Abréviations</p>
+      <ul id="snippet-manager-list" class="history-list"></ul>
+      <div class="sync-actions" style="flex-wrap: wrap;">
+        <input id="snippet-trigger-input" type="text" class="sync-code-input" placeholder="Déclencheur (ex: ;cr)" style="flex: 1; min-width: 100px;" autocomplete="off" />
+        <input id="snippet-expansion-input" type="text" class="sync-code-input" placeholder="Texte développé (ex: Compte rendu du $|)" style="flex: 2; min-width: 160px;" autocomplete="off" />
+        <button id="snippet-add-btn" type="button">Ajouter</button>
+      </div>
+      <p class="panel-hint">Tape le déclencheur puis espace/Entrée pour le développer. "$|" dans le texte marque où placer le curseur.</p>
     </div>
 
     <div class="search-row">
