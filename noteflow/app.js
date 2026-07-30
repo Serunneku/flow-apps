@@ -1502,6 +1502,69 @@ function noteMatchesQuery(note, clauses) {
   return clauses.every((c) => (c.negate ? !clauseMatches(note, c) : clauseMatches(note, c)));
 }
 
+// --- Search offloaded to a Web Worker once the notebook is big enough that
+// the query-matching pass could visibly stutter the UI on the main thread.
+// Below the threshold, filtering runs inline (unchanged, no worker
+// round-trip overhead for the common case of a small notebook). ---
+const SEARCH_WORKER_THRESHOLD = 300;
+let searchWorker = null;
+let searchWorkerRequestId = 0;
+const searchWorkerPending = new Map();
+
+function getSearchWorker() {
+  if (searchWorker) return searchWorker;
+  try {
+    searchWorker = new Worker("search-worker.js");
+    searchWorker.addEventListener("message", (e) => {
+      const { requestId, matchedIds } = e.data;
+      const resolve = searchWorkerPending.get(requestId);
+      if (resolve) {
+        searchWorkerPending.delete(requestId);
+        resolve(matchedIds);
+      }
+    });
+    searchWorker.addEventListener("error", () => {
+      // A worker script error aborts the worker silently otherwise — reject
+      // every pending request so callers fall back instead of hanging.
+      searchWorkerPending.forEach((resolve) => resolve(null));
+      searchWorkerPending.clear();
+    });
+  } catch {
+    searchWorker = null;
+  }
+  return searchWorker;
+}
+
+async function searchWithWorker(candidates, query) {
+  const worker = getSearchWorker();
+  if (!worker) throw new Error("Web Worker unavailable");
+  const requestId = ++searchWorkerRequestId;
+  const items = candidates.map((n) => ({
+    id: n.id,
+    tags: n.tags || [],
+    folder: n.folder || "",
+    updatedAt: n.updatedAt || 0,
+    locked: !!n.locked,
+    archived: !!n.archived,
+    pinned: !!n.pinned,
+    properties: n.properties || {},
+    haystack: noteHaystack(n),
+  }));
+  const matchedIds = await new Promise((resolve) => {
+    searchWorkerPending.set(requestId, resolve);
+    worker.postMessage({ requestId, items, query });
+  });
+  // A newer keystroke may have started another search while this one was
+  // still in flight — that request will render its own (fresher) result
+  // shortly, so this one is dropped rather than falling back and briefly
+  // flashing stale results back onto the screen.
+  if (requestId !== searchWorkerRequestId) return SUPERSEDED;
+  if (matchedIds === null) throw new Error("Search worker failed");
+  const byId = new Map(candidates.map((n) => [n.id, n]));
+  return matchedIds.map((id) => byId.get(id)).filter(Boolean);
+}
+const SUPERSEDED = Symbol("superseded-search-request");
+
 function renderList() {
   notesListEl.classList.toggle("selection-mode", selectionMode);
   if (selectionMode) updateSelectionCount();
@@ -1516,7 +1579,7 @@ function renderList() {
     .map((c) => c.text)
     .join(" ")
     .trim();
-  let visible = notes.filter((n) => {
+  const scopeFiltered = notes.filter((n) => {
     if (listView === "trash" && !n.deletedAt) return false;
     if (listView === "archived" && (!n.archived || n.deletedAt)) return false;
     if (listView === "active" && (n.archived || n.deletedAt)) return false;
@@ -1527,10 +1590,28 @@ function renderList() {
     )
       return false;
     if (activeTagFilter && !(n.tags || []).includes(activeTagFilter)) return false;
-    if (queryClauses.length && !noteMatchesQuery(n, queryClauses)) return false;
     return true;
   });
 
+  // The text-query match itself — the part whose cost actually scales with
+  // notebook size (parsing every note's stripped-HTML haystack) — is what
+  // gets offloaded to the search worker once there are enough notes for it
+  // to matter; everything else above is cheap primitive-field filtering
+  // that's not worth the postMessage round-trip.
+  if (query && scopeFiltered.length > SEARCH_WORKER_THRESHOLD) {
+    searchWithWorker(scopeFiltered, query)
+      .then((visible) => {
+        if (visible !== SUPERSEDED) finishRenderList(visible, query, highlightTerm);
+      })
+      .catch(() => finishRenderList(scopeFiltered.filter((n) => noteMatchesQuery(n, queryClauses)), query, highlightTerm));
+    return;
+  }
+
+  const visible = query ? scopeFiltered.filter((n) => noteMatchesQuery(n, queryClauses)) : scopeFiltered;
+  finishRenderList(visible, query, highlightTerm);
+}
+
+function finishRenderList(visible, query, highlightTerm) {
   visible.sort((a, b) => {
     if (!!b.pinned - !!a.pinned !== 0) return !!b.pinned - !!a.pinned;
     if (sortMode === "manual") return (a.order ?? 0) - (b.order ?? 0);
