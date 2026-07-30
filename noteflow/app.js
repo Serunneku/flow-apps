@@ -2113,6 +2113,123 @@ duplicateNoteBtn.addEventListener("click", async () => {
   showToast("Note dupliquée");
 });
 
+// --- Templates: reusable note structures (meeting notes, a daily journal
+// page, a book-reading sheet…) — stored as plain {name, html} pairs in
+// localStorage, entirely separate from the notes themselves. ---
+const TEMPLATES_PREF_KEY = "noteflow.templates";
+
+function loadTemplates() {
+  return loadPref(TEMPLATES_PREF_KEY, []);
+}
+function saveTemplates(list) {
+  savePref(TEMPLATES_PREF_KEY, list);
+}
+
+document.getElementById("save-as-template-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour l'enregistrer comme modèle");
+    return;
+  }
+  const name = window.prompt("Nom du modèle :", currentNote.title || "Modèle");
+  if (!name || !name.trim()) return;
+  await flushSave(true);
+  const templates = loadTemplates();
+  templates.push({ id: crypto.randomUUID(), name: name.trim(), html: currentNote.html || "" });
+  saveTemplates(templates);
+  showToast(`Modèle « ${name.trim()} » enregistré`);
+});
+
+function renderTemplatesPickerPanel() {
+  const templates = loadTemplates();
+  templatesListEl.innerHTML = "";
+  if (!templates.length) {
+    templatesListEl.innerHTML = '<li class="history-empty">Aucun modèle enregistré pour l\'instant.</li>';
+    return;
+  }
+  templates.forEach((tpl) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const span = document.createElement("span");
+    span.textContent = tpl.name;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Utiliser";
+    btn.addEventListener("click", async () => {
+      templatesPanel.classList.add("hidden");
+      const note = newNoteObject();
+      note.html = tpl.html;
+      notes.unshift(note);
+      await persistNote(note);
+      currentNote = note;
+      loadNoteIntoEditor();
+      showEditor();
+      titleInput.focus();
+    });
+    li.appendChild(span);
+    li.appendChild(btn);
+    templatesListEl.appendChild(li);
+  });
+}
+
+function renderManageTemplatesPanel() {
+  const templates = loadTemplates();
+  manageTemplatesListEl.innerHTML = "";
+  if (!templates.length) {
+    manageTemplatesListEl.innerHTML = '<li class="history-empty">Aucun modèle enregistré pour l\'instant.</li>';
+    return;
+  }
+  templates.forEach((tpl, index) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const span = document.createElement("span");
+    span.textContent = tpl.name;
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "link-btn";
+    renameBtn.textContent = "Renommer";
+    renameBtn.addEventListener("click", () => {
+      const newName = window.prompt("Nouveau nom :", tpl.name);
+      if (!newName || !newName.trim()) return;
+      const list = loadTemplates();
+      list[index].name = newName.trim();
+      saveTemplates(list);
+      renderManageTemplatesPanel();
+    });
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "link-btn danger";
+    deleteBtn.textContent = "Supprimer";
+    deleteBtn.addEventListener("click", () => {
+      const list = loadTemplates();
+      list.splice(index, 1);
+      saveTemplates(list);
+      renderManageTemplatesPanel();
+    });
+    li.appendChild(span);
+    li.appendChild(renameBtn);
+    li.appendChild(deleteBtn);
+    manageTemplatesListEl.appendChild(li);
+  });
+}
+
+const templatesBtn = document.getElementById("templates-btn");
+const templatesPanel = document.getElementById("templates-panel");
+const templatesListEl = document.getElementById("templates-list");
+const manageTemplatesBtn = document.getElementById("manage-templates-btn");
+const manageTemplatesPanel = document.getElementById("manage-templates-panel");
+const manageTemplatesListEl = document.getElementById("manage-templates-list");
+
+templatesBtn.addEventListener("click", () => {
+  const opening = templatesPanel.classList.contains("hidden");
+  templatesPanel.classList.toggle("hidden");
+  if (opening) renderTemplatesPickerPanel();
+});
+manageTemplatesBtn.addEventListener("click", () => {
+  const opening = manageTemplatesPanel.classList.contains("hidden");
+  manageTemplatesPanel.classList.toggle("hidden");
+  if (opening) renderManageTemplatesPanel();
+});
+
 // --- Reversible note splitting: one note per H2 heading, each linked back
 // to the original via a wikilink (reuses the existing backlinks panel). ---
 document.getElementById("split-note-btn").addEventListener("click", async () => {
