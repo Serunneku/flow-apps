@@ -1542,6 +1542,65 @@ function noteMatchesQuery(note, clauses) {
   return clauses.every((c) => (c.negate ? !clauseMatches(note, c) : clauseMatches(note, c)));
 }
 
+// --- Local "semantic" search: no embedding model ships with the app (that
+// would mean a multi-megabyte download and a build step neither of which
+// fit a single-file, offline-first PWA) — instead, a TF-IDF vector space
+// over each note's own vocabulary, ranked by cosine similarity to the
+// query. It surfaces notes that share topical vocabulary with the query
+// even when no exact substring matches, which is the practical win users
+// actually want out of "search by meaning" day to day. Entirely local,
+// recomputed from scratch on each search (no persisted index to go stale). ---
+const SEMANTIC_SEARCH_PREF_KEY = "noteflow.semanticSearch";
+let semanticSearchMode = loadPref(SEMANTIC_SEARCH_PREF_KEY, false);
+const STOPWORDS_FR = new Set([
+  "le", "la", "les", "de", "des", "du", "un", "une", "et", "à", "a", "en", "que", "qui", "pour", "dans", "sur",
+  "au", "aux", "ce", "ces", "cette", "cet", "se", "sa", "son", "ses", "est", "sont", "avec", "par", "ne", "pas",
+  "plus", "ou", "mais", "comme", "je", "tu", "il", "elle", "nous", "vous", "ils", "elles", "d", "l", "c", "qu",
+  "on", "y", "si", "the", "and", "of", "to", "in", "for", "with", "is", "are",
+]);
+
+function tokenizeForSemanticSearch(text) {
+  return (text.toLowerCase().match(/[a-zàâäéèêëïîôöùûüçñ]+/gi) || [])
+    .map((t) => t.normalize("NFD").replace(/[̀-ͯ]/g, ""))
+    .filter((t) => t.length > 2 && !STOPWORDS_FR.has(t));
+}
+
+function semanticSearch(candidates, query) {
+  const docs = candidates.map((n) => ({ note: n, tokens: tokenizeForSemanticSearch(noteHaystack(n)) }));
+  const df = new Map();
+  docs.forEach((d) => {
+    new Set(d.tokens).forEach((t) => df.set(t, (df.get(t) || 0) + 1));
+  });
+  const total = docs.length || 1;
+  const idf = (t) => Math.log(1 + total / (1 + (df.get(t) || 0)));
+  const vectorize = (tokens) => {
+    const tf = new Map();
+    tokens.forEach((t) => tf.set(t, (tf.get(t) || 0) + 1));
+    const vec = new Map();
+    tf.forEach((count, t) => vec.set(t, count * idf(t)));
+    return vec;
+  };
+  const norm = (vec) => {
+    let sum = 0;
+    vec.forEach((v) => (sum += v * v));
+    return Math.sqrt(sum) || 1;
+  };
+  const cosine = (a, b) => {
+    let dot = 0;
+    const [small, big] = a.size < b.size ? [a, b] : [b, a];
+    small.forEach((v, k) => {
+      if (big.has(k)) dot += v * big.get(k);
+    });
+    return dot / (norm(a) * norm(b));
+  };
+  const qVec = vectorize(tokenizeForSemanticSearch(query));
+  return docs
+    .map((d) => ({ note: d.note, score: cosine(qVec, vectorize(d.tokens)) }))
+    .filter((s) => s.score > 0.04)
+    .sort((a, b) => b.score - a.score)
+    .map((s) => s.note);
+}
+
 // --- Search offloaded to a Web Worker once the notebook is big enough that
 // the query-matching pass could visibly stutter the UI on the main thread.
 // Below the threshold, filtering runs inline (unchanged, no worker
@@ -1634,6 +1693,11 @@ function renderList() {
     return true;
   });
 
+  if (query && semanticSearchMode) {
+    finishRenderList(semanticSearch(scopeFiltered, query), query, "", true);
+    return;
+  }
+
   // The text-query match itself — the part whose cost actually scales with
   // notebook size (parsing every note's stripped-HTML haystack) — is what
   // gets offloaded to the search worker once there are enough notes for it
@@ -1652,14 +1716,20 @@ function renderList() {
   finishRenderList(visible, query, highlightTerm);
 }
 
-function finishRenderList(visible, query, highlightTerm) {
-  visible.sort((a, b) => {
-    if (!!b.pinned - !!a.pinned !== 0) return !!b.pinned - !!a.pinned;
-    if (sortMode === "manual") return (a.order ?? 0) - (b.order ?? 0);
-    if (sortMode === "title") return (a.title || "").localeCompare(b.title || "", "fr");
-    if (sortMode === "created") return b.createdAt - a.createdAt;
-    return b.updatedAt - a.updatedAt;
-  });
+function finishRenderList(visible, query, highlightTerm, preserveOrder) {
+  // Semantic search already returns notes ranked by relevance to the query
+  // — re-sorting them by pinned/date/title would throw that ranking away,
+  // so preserveOrder skips it there (pinned notes lose their usual priority
+  // in that one mode, which is the right trade-off: relevance is the point).
+  if (!preserveOrder) {
+    visible.sort((a, b) => {
+      if (!!b.pinned - !!a.pinned !== 0) return !!b.pinned - !!a.pinned;
+      if (sortMode === "manual") return (a.order ?? 0) - (b.order ?? 0);
+      if (sortMode === "title") return (a.title || "").localeCompare(b.title || "", "fr");
+      if (sortMode === "created") return b.createdAt - a.createdAt;
+      return b.updatedAt - a.updatedAt;
+    });
+  }
 
   notesListEl.classList.toggle("manual-mode", sortMode === "manual");
   notesListEl.innerHTML = "";
@@ -1832,6 +1902,16 @@ searchInput.addEventListener("input", () => {
     searchQuery = searchInput.value;
     renderList();
   }, 150);
+});
+
+const semanticSearchToggle = document.getElementById("semantic-search-toggle");
+setPressed(semanticSearchToggle, semanticSearchMode);
+semanticSearchToggle.addEventListener("click", () => {
+  semanticSearchMode = !semanticSearchMode;
+  savePref(SEMANTIC_SEARCH_PREF_KEY, semanticSearchMode);
+  setPressed(semanticSearchToggle, semanticSearchMode);
+  showToast(semanticSearchMode ? "Recherche par sens activée" : "Recherche par sens désactivée");
+  if (searchQuery.trim()) renderList();
 });
 
 // --- Saved searches: pin the current query + folder/tag filter combo as a
