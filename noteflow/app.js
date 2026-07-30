@@ -4639,6 +4639,230 @@ window.addEventListener("resize", () => {
   }
 });
 
+// --- Infinite whiteboard: freeform text cards + freehand drawing sharing
+// one coordinate space, entirely separate from the note editor and from
+// any single note — its own per-vault canvas for spatial thinking rather
+// than linear note-taking. A large fixed "world" panned via a CSS
+// transform stands in for a truly unbounded canvas: simpler and plenty
+// for sketching out ideas without the complexity (and risk) of a
+// dynamically resizing coordinate space. ---
+const WHITEBOARD_WORLD = { w: 3000, h: 2000 };
+const whiteboardOverlay = document.getElementById("whiteboard-overlay");
+const whiteboardClose = document.getElementById("whiteboard-close");
+const whiteboardWorldWrap = document.getElementById("whiteboard-world-wrap");
+const whiteboardWorld = document.getElementById("whiteboard-world");
+const whiteboardCanvas = document.getElementById("whiteboard-canvas");
+const whiteboardCtx = whiteboardCanvas.getContext("2d");
+const whiteboardCardsEl = document.getElementById("whiteboard-cards");
+const whiteboardBtn = document.getElementById("whiteboard-btn");
+const whiteboardMoveBtn = document.getElementById("whiteboard-move-btn");
+const whiteboardPenBtn = document.getElementById("whiteboard-pen-btn");
+const whiteboardAddCardBtn = document.getElementById("whiteboard-add-card-btn");
+const whiteboardUndoBtn = document.getElementById("whiteboard-undo-btn");
+
+let whiteboardMode = "move"; // "move" | "pen"
+let whiteboardPan = { x: 0, y: 0 };
+let whiteboardData = { cards: [], strokes: [] };
+let whiteboardActiveStroke = null;
+let whiteboardPanning = false;
+let whiteboardLastPointer = null;
+let whiteboardDragState = null;
+
+function whiteboardKey() {
+  return "noteflow.whiteboard." + activeVaultId;
+}
+function loadWhiteboard() {
+  const data = loadPref(whiteboardKey(), { cards: [], strokes: [] });
+  if (!Array.isArray(data.cards)) data.cards = [];
+  if (!Array.isArray(data.strokes)) data.strokes = [];
+  return data;
+}
+function saveWhiteboard() {
+  savePref(whiteboardKey(), whiteboardData);
+}
+
+function applyWhiteboardTransform() {
+  whiteboardWorld.style.transform = `translate(${whiteboardPan.x}px, ${whiteboardPan.y}px)`;
+}
+
+function resizeWhiteboardCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  whiteboardCanvas.width = WHITEBOARD_WORLD.w * dpr;
+  whiteboardCanvas.height = WHITEBOARD_WORLD.h * dpr;
+  whiteboardCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawWhiteboardStroke(stroke) {
+  if (stroke.points.length < 2) return;
+  whiteboardCtx.strokeStyle = stroke.color;
+  whiteboardCtx.lineWidth = stroke.width;
+  whiteboardCtx.lineJoin = "round";
+  whiteboardCtx.lineCap = "round";
+  whiteboardCtx.beginPath();
+  stroke.points.forEach((p, i) => {
+    if (i === 0) whiteboardCtx.moveTo(p.x, p.y);
+    else whiteboardCtx.lineTo(p.x, p.y);
+  });
+  whiteboardCtx.stroke();
+}
+
+function drawWhiteboardStrokes() {
+  whiteboardCtx.clearRect(0, 0, WHITEBOARD_WORLD.w, WHITEBOARD_WORLD.h);
+  whiteboardData.strokes.forEach(drawWhiteboardStroke);
+}
+
+function whiteboardPointFromEvent(e) {
+  const rect = whiteboardCanvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function renderWhiteboardCard(card) {
+  const el = document.createElement("div");
+  el.className = "whiteboard-card";
+  el.style.left = card.x + "px";
+  el.style.top = card.y + "px";
+  el.dataset.id = card.id;
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "whiteboard-card-delete";
+  del.textContent = "×";
+  del.title = "Supprimer cette carte";
+  del.addEventListener("mousedown", (e) => e.preventDefault());
+  del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    whiteboardData.cards = whiteboardData.cards.filter((c) => c.id !== card.id);
+    saveWhiteboard();
+    el.remove();
+  });
+  el.appendChild(del);
+
+  // Kept as a separate contentEditable node from the card itself — the
+  // delete button lives outside it, so its "×" never leaks into
+  // el.textContent the way it would if the whole card were editable.
+  const text = document.createElement("div");
+  text.className = "whiteboard-card-text";
+  text.contentEditable = "true";
+  text.textContent = card.text || "";
+  text.addEventListener("input", () => {
+    card.text = text.textContent;
+    saveWhiteboard();
+  });
+  el.appendChild(text);
+
+  el.addEventListener("pointerdown", (e) => {
+    if (e.target === del) return;
+    whiteboardDragState = { card, el, startX: e.clientX, startY: e.clientY, cardX: card.x, cardY: card.y, dragging: false };
+  });
+  whiteboardCardsEl.appendChild(el);
+  return el;
+}
+
+whiteboardCardsEl.addEventListener("pointermove", (e) => {
+  if (!whiteboardDragState) return;
+  const { card, el, startX, startY, cardX, cardY } = whiteboardDragState;
+  const dx = e.clientX - startX;
+  const dy = e.clientY - startY;
+  if (!whiteboardDragState.dragging && Math.hypot(dx, dy) < 4) return;
+  whiteboardDragState.dragging = true;
+  card.x = cardX + dx;
+  card.y = cardY + dy;
+  el.style.left = card.x + "px";
+  el.style.top = card.y + "px";
+});
+document.addEventListener("pointerup", () => {
+  if (whiteboardDragState && whiteboardDragState.dragging) saveWhiteboard();
+  whiteboardDragState = null;
+});
+
+function setWhiteboardMode(mode) {
+  whiteboardMode = mode;
+  setPressed(whiteboardMoveBtn, mode === "move");
+  setPressed(whiteboardPenBtn, mode === "pen");
+  whiteboardWorldWrap.classList.toggle("drawing", mode === "pen");
+}
+whiteboardMoveBtn.addEventListener("click", () => setWhiteboardMode("move"));
+whiteboardPenBtn.addEventListener("click", () => setWhiteboardMode("pen"));
+
+whiteboardCanvas.addEventListener("pointerdown", (e) => {
+  if (whiteboardMode === "pen") {
+    const rootStyle = getComputedStyle(document.documentElement);
+    const color = rootStyle.getPropertyValue("--text").trim() || "#1d1d1f";
+    whiteboardActiveStroke = { points: [whiteboardPointFromEvent(e)], color, width: 3 };
+    whiteboardData.strokes.push(whiteboardActiveStroke);
+  } else {
+    whiteboardPanning = true;
+    whiteboardLastPointer = { x: e.clientX, y: e.clientY };
+    whiteboardWorldWrap.classList.add("panning");
+  }
+  whiteboardCanvas.setPointerCapture(e.pointerId);
+});
+whiteboardCanvas.addEventListener("pointermove", (e) => {
+  if (whiteboardMode === "pen" && whiteboardActiveStroke) {
+    whiteboardActiveStroke.points.push(whiteboardPointFromEvent(e));
+    drawWhiteboardStroke(whiteboardActiveStroke);
+  } else if (whiteboardPanning && whiteboardLastPointer) {
+    whiteboardPan.x += e.clientX - whiteboardLastPointer.x;
+    whiteboardPan.y += e.clientY - whiteboardLastPointer.y;
+    whiteboardLastPointer = { x: e.clientX, y: e.clientY };
+    applyWhiteboardTransform();
+  }
+});
+function endWhiteboardInteraction() {
+  if (whiteboardActiveStroke) {
+    whiteboardActiveStroke = null;
+    saveWhiteboard();
+  }
+  whiteboardPanning = false;
+  whiteboardLastPointer = null;
+  whiteboardWorldWrap.classList.remove("panning");
+}
+whiteboardCanvas.addEventListener("pointerup", endWhiteboardInteraction);
+whiteboardCanvas.addEventListener("pointercancel", endWhiteboardInteraction);
+
+whiteboardUndoBtn.addEventListener("click", () => {
+  if (!whiteboardData.strokes.length) return;
+  whiteboardData.strokes.pop();
+  drawWhiteboardStrokes();
+  saveWhiteboard();
+});
+
+whiteboardAddCardBtn.addEventListener("click", () => {
+  const rect = whiteboardWorldWrap.getBoundingClientRect();
+  const card = {
+    id: crypto.randomUUID(),
+    x: -whiteboardPan.x + rect.width / 2 - 100,
+    y: -whiteboardPan.y + rect.height / 2 - 50,
+    text: "",
+  };
+  whiteboardData.cards.push(card);
+  saveWhiteboard();
+  const el = renderWhiteboardCard(card);
+  el.querySelector(".whiteboard-card-text").focus();
+});
+
+function openWhiteboard() {
+  whiteboardData = loadWhiteboard();
+  whiteboardPan = { x: 0, y: 0 };
+  applyWhiteboardTransform();
+  setWhiteboardMode("move");
+  whiteboardOverlay.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    resizeWhiteboardCanvas();
+    drawWhiteboardStrokes();
+    whiteboardCardsEl.innerHTML = "";
+    whiteboardData.cards.forEach(renderWhiteboardCard);
+  });
+}
+function closeWhiteboard() {
+  whiteboardOverlay.classList.add("hidden");
+}
+whiteboardBtn.addEventListener("click", () => {
+  showList();
+  openWhiteboard();
+});
+whiteboardClose.addEventListener("click", closeWhiteboard);
+
 // --- Centralized tasks view: every checklist item across every note,
 // grouped by note, editable in place (toggling here writes straight back
 // into that note's stored html — no need to open the note itself). ---

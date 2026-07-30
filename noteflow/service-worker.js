@@ -1,4 +1,4 @@
-const CACHE_NAME = "noteflow-v13";
+const CACHE_NAME = "noteflow-v14";
 const ASSETS = ["./", "./index.html", "./style.css", "./app.js", "./manifest.json", "./search-worker.js"];
 
 self.addEventListener("install", (event) => {
