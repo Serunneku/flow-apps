@@ -4736,25 +4736,54 @@ wikilinkHoverPreviewEl.addEventListener("mouseenter", () => clearTimeout(wikilin
 wikilinkHoverPreviewEl.addEventListener("mouseleave", hideWikilinkHoverPreview);
 
 // --- Transclusion: typing ![[Titre]] embeds a read-only, refreshed-on-open
-// snapshot of that note's content right here, instead of just linking to it. ---
-function renderTransclusionBlock(el, note) {
+// snapshot of that note's content right here, instead of just linking to it.
+// ![[Titre#N]] embeds only the N-th block (paragraph/titre/item) of that
+// note, still refreshed from the live source each time the note is opened. ---
+// Top-level nodes of a note's HTML, one per "block". The editor often leaves
+// the very first line as a bare text node (no wrapping <div>/<p>) until a
+// second line is typed, so plain text nodes count as blocks too.
+function getNoteBlockElements(note) {
+  const container = document.createElement("div");
+  container.innerHTML = sanitizeNoteHtml(note.html) || "";
+  return Array.from(container.childNodes).filter(
+    (n) => n.nodeType === 1 || (n.nodeType === 3 && n.textContent.trim()),
+  );
+}
+
+function blockOuterHtml(node) {
+  if (node.nodeType === 1) return node.outerHTML;
+  return "<p>" + escapeHtml(node.textContent) + "</p>";
+}
+
+function renderTransclusionBlock(el, note, blockIndex) {
   el.innerHTML = "";
   const header = document.createElement("div");
   header.className = "transclusion-header";
-  header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
   const body = document.createElement("div");
   body.className = "transclusion-body";
-  body.innerHTML = note.locked ? "<p><em>Cette note est verrouillée.</em></p>" : sanitizeNoteHtml(note.html) || "<p><em>Note vide.</em></p>";
+  if (note.locked) {
+    header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
+    body.innerHTML = "<p><em>Cette note est verrouillée.</em></p>";
+  } else if (blockIndex != null) {
+    const blocks = getNoteBlockElements(note);
+    const block = blocks[blockIndex];
+    header.textContent = "↳ Bloc n°" + (blockIndex + 1) + " de « " + (note.title || "Sans titre") + " »";
+    body.innerHTML = block ? blockOuterHtml(block) : "<p><em>Bloc introuvable (la note source a changé).</em></p>";
+  } else {
+    header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
+    body.innerHTML = sanitizeNoteHtml(note.html) || "<p><em>Note vide.</em></p>";
+  }
   el.appendChild(header);
   el.appendChild(body);
 }
 
-function insertTransclusionBlock(target) {
+function insertTransclusionBlock(target, blockIndex) {
   const div = document.createElement("div");
   div.className = "transclusion";
   div.contentEditable = "false";
   div.dataset.noteId = target.id;
-  renderTransclusionBlock(div, target);
+  if (blockIndex != null) div.dataset.blockIndex = String(blockIndex);
+  renderTransclusionBlock(div, target, blockIndex);
   return div;
 }
 
@@ -4768,7 +4797,8 @@ function refreshTransclusions() {
       el.innerHTML = '<div class="transclusion-header">↳ Note source introuvable (supprimée)</div>';
       return;
     }
-    renderTransclusionBlock(el, source);
+    const blockIndex = el.dataset.blockIndex != null ? Number(el.dataset.blockIndex) : null;
+    renderTransclusionBlock(el, source, blockIndex);
   });
 }
 
@@ -4781,7 +4811,18 @@ textEditor.addEventListener("input", () => {
   const text = node.textContent.slice(0, offset);
   const match = text.match(/!\[\[([^[\]]+)\]\]$/);
   if (!match) return;
-  const query = match[1].trim().toLowerCase();
+  const raw = match[1].trim();
+  const hashIdx = raw.lastIndexOf("#");
+  let queryTitle = raw;
+  let blockIndex = null;
+  if (hashIdx > 0) {
+    const maybeNum = raw.slice(hashIdx + 1).trim();
+    if (/^\d+$/.test(maybeNum) && Number(maybeNum) > 0) {
+      queryTitle = raw.slice(0, hashIdx).trim();
+      blockIndex = Number(maybeNum) - 1;
+    }
+  }
+  const query = queryTitle.toLowerCase();
   if (!query) return;
   const target =
     notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
@@ -4793,7 +4834,7 @@ textEditor.addEventListener("input", () => {
     range.setStart(node, offset - full.length);
     range.setEnd(node, offset);
     range.deleteContents();
-    const block = insertTransclusionBlock(target);
+    const block = insertTransclusionBlock(target, blockIndex);
     range.insertNode(block);
     const p = document.createElement("p");
     p.innerHTML = "<br>";
