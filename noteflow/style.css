@@ -763,6 +763,30 @@ button {
   text-decoration: none;
 }
 
+.backlinks-section-header {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 10px 2px 2px;
+}
+
+.backlink-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.backlink-extract {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .history-empty {
   font-size: 13px;
   color: var(--muted);

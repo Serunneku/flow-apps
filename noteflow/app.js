@@ -2951,30 +2951,100 @@ backlinksBtn.addEventListener("click", () => {
   if (opening) renderBacklinks();
 });
 
-function renderBacklinks() {
-  const needle = `data-note-id="${currentNote.id}"`;
-  const linking = notes.filter((n) => !n.deletedAt && n.id !== currentNote.id && !n.locked && (n.html || "").includes(needle));
-  backlinksListEl.innerHTML = "";
-  if (!linking.length) {
-    backlinksListEl.innerHTML = '<li class="history-empty">Aucune note ne pointe encore ici.</li>';
+// The surrounding paragraph/line of a link, not the whole note body — a
+// quick sense of *why* another note points here, without opening it.
+function extractLinkContext(html, noteId) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const el = container.querySelector(`[data-note-id="${CSS.escape(noteId)}"]`);
+  if (!el) return "";
+  const block = el.closest("p, li, div, h1, h2, h3") || el.parentElement || container;
+  const text = block.textContent.trim();
+  return text.length > 140 ? text.slice(0, 140) + "…" : text;
+}
+
+function extractOutgoingRefs(html) {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const refs = [];
+  container.querySelectorAll("a.wikilink[data-note-id]").forEach((a) => refs.push({ id: a.dataset.noteId, kind: "link" }));
+  container.querySelectorAll(".transclusion[data-note-id]").forEach((d) => refs.push({ id: d.dataset.noteId, kind: "transclusion" }));
+  return refs;
+}
+
+function addBacklinksSection(title, entries, emptyText) {
+  const header = document.createElement("li");
+  header.className = "backlinks-section-header";
+  header.textContent = title;
+  backlinksListEl.appendChild(header);
+  if (!entries.length) {
+    const li = document.createElement("li");
+    li.className = "history-empty";
+    li.textContent = emptyText;
+    backlinksListEl.appendChild(li);
     return;
   }
-  linking.forEach((n) => {
+  entries.forEach(({ label, sub, targetId, broken }) => {
     const li = document.createElement("li");
     li.className = "history-item";
-    const label = document.createElement("span");
-    label.textContent = n.title || "Sans titre";
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Ouvrir";
-    btn.addEventListener("click", () => {
-      backlinksPanel.classList.add("hidden");
-      goToNote(n.id);
-    });
-    li.appendChild(label);
-    li.appendChild(btn);
+    const textWrap = document.createElement("div");
+    textWrap.className = "backlink-text";
+    const labelEl = document.createElement("span");
+    labelEl.textContent = broken ? `${label} (lien brisé)` : label;
+    textWrap.appendChild(labelEl);
+    if (sub) {
+      const subEl = document.createElement("span");
+      subEl.className = "backlink-extract";
+      subEl.textContent = sub;
+      textWrap.appendChild(subEl);
+    }
+    li.appendChild(textWrap);
+    if (!broken) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Ouvrir";
+      btn.addEventListener("click", () => {
+        backlinksPanel.classList.add("hidden");
+        goToNote(targetId);
+      });
+      li.appendChild(btn);
+    }
     backlinksListEl.appendChild(li);
   });
+}
+
+function renderBacklinks() {
+  backlinksListEl.innerHTML = "";
+  const needle = `data-note-id="${currentNote.id}"`;
+  const incoming = notes
+    .filter((n) => !n.deletedAt && n.id !== currentNote.id && (n.html || "").includes(needle))
+    .map((n) => ({
+      label: n.locked ? "🔒 " + (n.title || "Sans titre") : n.title || "Sans titre",
+      sub: n.locked ? "" : extractLinkContext(n.html, currentNote.id),
+      targetId: n.id,
+    }));
+
+  const outgoingRefs = extractOutgoingRefs(currentNote.html);
+  const outgoingLinks = outgoingRefs
+    .filter((r) => r.kind === "link")
+    .map((r) => {
+      const target = notes.find((n) => n.id === r.id && !n.deletedAt);
+      return target
+        ? { label: target.locked ? "🔒 " + (target.title || "Sans titre") : target.title || "Sans titre", targetId: target.id }
+        : { label: "Note supprimée", broken: true };
+    });
+  const transclusions = outgoingRefs
+    .filter((r) => r.kind === "transclusion")
+    .map((r) => {
+      const target = notes.find((n) => n.id === r.id && !n.deletedAt);
+      return target
+        ? { label: target.locked ? "🔒 " + (target.title || "Sans titre") : target.title || "Sans titre", targetId: target.id }
+        : { label: "Note supprimée", broken: true };
+    });
+
+  addBacklinksSection("Liens entrants", incoming, "Aucune note ne pointe encore ici.");
+  addBacklinksSection("Liens sortants", outgoingLinks, "Cette note ne pointe vers aucune autre.");
+  addBacklinksSection("Transclusions", transclusions, "Aucune transclusion dans cette note.");
 }
 
 // --- Markdown-style shortcuts while typing ---
