@@ -2025,6 +2025,60 @@ select option {
   text-underline-offset: 2px;
 }
 
+.text-editor .note-code {
+  position: relative;
+  margin: 0.6em 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  overflow-x: auto;
+}
+
+.text-editor .note-code code {
+  display: block;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.85em;
+  white-space: pre;
+  outline: none;
+}
+
+.note-code-highlight-btn {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--gold) 20%, transparent);
+  color: var(--gold-ink);
+  cursor: pointer;
+  z-index: 1;
+}
+
+.text-editor .note-callout {
+  margin: 0.6em 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border-left: 4px solid var(--gold);
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+  outline: none;
+}
+
+.text-editor .note-callout-warning {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.text-editor blockquote {
+  margin: 0.6em 0;
+  padding: 4px 16px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  font-style: italic;
+}
+
 .text-editor .transclusion {
   margin: 0.6em 0;
   padding: 10px 14px;

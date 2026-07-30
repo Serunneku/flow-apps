@@ -3983,6 +3983,12 @@ formatToolbar.addEventListener("click", (e) => {
     tableDelete();
   } else if (cmd === "table-header-toggle") {
     toggleTableHeader();
+  } else if (cmd === "code-block") {
+    insertCodeBlock();
+  } else if (cmd === "blockquote") {
+    document.execCommand("formatBlock", false, "blockquote");
+  } else if (cmd === "callout-info" || cmd === "callout-warning") {
+    insertCallout(cmd === "callout-warning" ? "warning" : "info");
   } else {
     document.execCommand(cmd, false, null);
     // Chrome leaves the caret at the START of the line after wrapping it
@@ -4808,6 +4814,131 @@ function toggleTableHeader() {
   });
   scheduleSave();
   showToast(isHeader ? "Ligne d'en-tête retirée" : "Ligne d'en-tête ajoutée (clique dessus pour trier)");
+}
+
+// --- Code blocks (with syntax coloring loaded on demand) and callouts ---
+const HLJS_CDN = "https://cdn.jsdelivr.net/npm/highlight.js@11/lib/core.min.js";
+const HLJS_LANGS_CDN = "https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages";
+const HLJS_CSS_CDN = "https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css";
+const HLJS_LANGUAGES = ["javascript", "python", "css", "xml", "json", "bash", "sql"];
+let hljsPromise = null;
+
+function loadHljsCss() {
+  if (document.getElementById("hljs-theme-css")) return;
+  const link = document.createElement("link");
+  link.id = "hljs-theme-css";
+  link.rel = "stylesheet";
+  link.href = HLJS_CSS_CDN;
+  document.head.appendChild(link);
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = src;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`CDN unreachable: ${src}`));
+    document.head.appendChild(script);
+  });
+}
+
+async function getHljs() {
+  if (window.hljs) return window.hljs;
+  if (!hljsPromise) {
+    hljsPromise = (async () => {
+      await loadScript(HLJS_CDN);
+      for (const lang of HLJS_LANGUAGES) {
+        await loadScript(`${HLJS_LANGS_CDN}/${lang}.min.js`).catch(() => {});
+      }
+      return window.hljs;
+    })();
+  }
+  return hljsPromise;
+}
+
+function insertCodeBlock() {
+  const pre = document.createElement("pre");
+  pre.className = "note-code";
+  const code = document.createElement("code");
+  code.contentEditable = "true";
+  // An empty contenteditable has no text node to anchor a caret in — Chrome's
+  // native typing then lands the very next keystroke as a sibling outside
+  // the element instead of inside it (the same issue the checklist items
+  // solve with a zero-width space placeholder).
+  code.textContent = "​";
+  const highlightBtn = document.createElement("button");
+  highlightBtn.type = "button";
+  highlightBtn.className = "note-code-highlight-btn";
+  highlightBtn.contentEditable = "false";
+  highlightBtn.textContent = "Colorer";
+  pre.appendChild(highlightBtn);
+  pre.appendChild(code);
+  restoreSelection();
+  const sel = window.getSelection();
+  const range = sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : (() => {
+    const r = document.createRange();
+    r.selectNodeContents(textEditor);
+    r.collapse(false);
+    return r;
+  })();
+  range.collapse(false);
+  range.insertNode(pre);
+  const p = document.createElement("p");
+  p.innerHTML = "<br>";
+  pre.after(p);
+  code.focus();
+  placeCaretAtEnd(code);
+  scheduleSave();
+}
+
+async function highlightCodeBlock(codeEl) {
+  try {
+    const hljs = await getHljs();
+    if (!hljs) throw new Error("hljs unavailable");
+    loadHljsCss();
+    codeEl.removeAttribute("data-highlighted");
+    hljs.highlightElement(codeEl);
+    codeEl.contentEditable = "false";
+    scheduleSave();
+  } catch {
+    showToast("Coloration syntaxique indisponible (connexion requise pour charger le moteur)");
+  }
+}
+
+// A small always-visible affordance on hover, rather than a separate
+// toolbar mode: click "Colorer" right on the code block that needs it.
+textEditor.addEventListener("click", (e) => {
+  const btn = e.target.closest(".note-code-highlight-btn");
+  if (!btn) return;
+  e.preventDefault();
+  const code = btn.parentElement.querySelector("code");
+  if (code) highlightCodeBlock(code);
+});
+
+function insertCallout(type) {
+  const div = document.createElement("div");
+  div.className = `note-callout note-callout-${type}`;
+  div.contentEditable = "true";
+  div.textContent = type === "warning" ? "Avertissement…" : "Info…";
+  restoreSelection();
+  const sel = window.getSelection();
+  const range = sel.rangeCount && textEditor.contains(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : (() => {
+    const r = document.createRange();
+    r.selectNodeContents(textEditor);
+    r.collapse(false);
+    return r;
+  })();
+  range.collapse(false);
+  range.insertNode(div);
+  const p = document.createElement("p");
+  p.innerHTML = "<br>";
+  div.after(p);
+  div.focus();
+  const selectRange = document.createRange();
+  selectRange.selectNodeContents(div);
+  sel.removeAllRanges();
+  sel.addRange(selectRange);
+  scheduleSave();
 }
 
 const tableSortState = new WeakMap(); // table -> { colIndex, dir }
