@@ -4,18 +4,30 @@ const FIREBASE_CDN = "https://www.gstatic.com/firebasejs/10.13.0";
 const DB_NAME = "noteflow";
 const STORE = "notes";
 
+// Singleton connection: the autosave path calls dbPut every ~500ms while
+// typing, and each of these used to open (and never close) a brand new
+// IDBDatabase — an unbounded number of live connections over a long writing
+// session, and a future schema version bump would hang forever in
+// "blocked" waiting for connections that were never going to close.
+let dbPromise = null;
 function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: "id" });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) {
+          db.createObjectStore(STORE, { keyPath: "id" });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => {
+        dbPromise = null;
+        reject(req.error);
+      };
+    });
+  }
+  return dbPromise;
 }
 
 async function dbGetAll() {
@@ -308,6 +320,8 @@ contrastToggleBtn.addEventListener("click", () => {
 
 // --- Custom dropdowns (native <select> stays as the source of truth; this
 // only replaces how it's presented, so all existing "change" logic keeps working) ---
+let customSelectIdCounter = 0;
+
 function enhanceSelect(select) {
   const wrap = document.createElement("div");
   wrap.className = "custom-select";
@@ -318,22 +332,47 @@ function enhanceSelect(select) {
   select.setAttribute("tabindex", "-1");
   select.setAttribute("aria-hidden", "true");
 
+  const listId = `custom-select-list-${++customSelectIdCounter}`;
+
   const trigger = document.createElement("button");
   trigger.type = "button";
   trigger.className = "custom-select-trigger";
-  if (select.title) trigger.title = select.title;
+  trigger.setAttribute("role", "combobox");
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.setAttribute("aria-controls", listId);
+  // The global "title -> aria-label" pass (see above) only runs once at
+  // load, before enhanceSelect() ever creates this button — so it never
+  // reached this element. Set it directly instead of relying on that pass.
+  if (select.title) {
+    trigger.title = select.title;
+    trigger.setAttribute("aria-label", select.title);
+  }
   wrap.appendChild(trigger);
 
   const list = document.createElement("div");
   list.className = "custom-select-list hidden";
+  list.id = listId;
+  list.setAttribute("role", "listbox");
   wrap.appendChild(list);
+
+  let optionItems = [];
+
+  function focusOption(index) {
+    if (!optionItems.length) return;
+    const clamped = Math.max(0, Math.min(index, optionItems.length - 1));
+    optionItems[clamped].focus();
+  }
 
   function renderOptions() {
     list.innerHTML = "";
-    Array.from(select.options).forEach((opt, i) => {
+    optionItems = Array.from(select.options).map((opt, i) => {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "custom-select-option" + (i === select.selectedIndex ? " selected" : "");
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-selected", i === select.selectedIndex ? "true" : "false");
+      item.tabIndex = -1;
       item.textContent = opt.textContent;
       if (opt.style.fontFamily) item.style.fontFamily = opt.style.fontFamily;
       item.addEventListener("click", () => {
@@ -341,8 +380,24 @@ function enhanceSelect(select) {
         select.dispatchEvent(new Event("change", { bubbles: true }));
         refresh();
         closeList();
+        trigger.focus();
+      });
+      item.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          focusOption(optionItems.indexOf(item) + 1);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          focusOption(optionItems.indexOf(item) - 1);
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          item.click();
+        } else if (e.key === "Tab") {
+          closeList();
+        }
       });
       list.appendChild(item);
+      return item;
     });
   }
   function updateTrigger() {
@@ -352,11 +407,13 @@ function enhanceSelect(select) {
   function closeList() {
     list.classList.add("hidden");
     trigger.classList.remove("open");
+    trigger.setAttribute("aria-expanded", "false");
   }
   function openList() {
     renderOptions();
     list.classList.remove("hidden");
     trigger.classList.add("open");
+    trigger.setAttribute("aria-expanded", "true");
   }
   function refresh() {
     updateTrigger();
@@ -371,11 +428,21 @@ function enhanceSelect(select) {
     if (list.classList.contains("hidden")) openList();
     else closeList();
   });
+  trigger.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (list.classList.contains("hidden")) openList();
+      focusOption(select.selectedIndex);
+    }
+  });
   document.addEventListener("click", (e) => {
     if (!wrap.contains(e.target)) closeList();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeList();
+    if (e.key === "Escape" && !list.classList.contains("hidden")) {
+      closeList();
+      trigger.focus();
+    }
   });
 
   updateTrigger();
@@ -473,6 +540,9 @@ const listScreen = document.getElementById("list-screen");
 const editorScreen = document.getElementById("editor-screen");
 
 function showList() {
+  if (activeRecorder && activeRecorder.state === "recording") {
+    activeRecorder.stop();
+  }
   // Leaving a locked note's editor always re-locks it in memory too: its
   // plaintext body/drawing/history are dropped and the unlock key forgotten,
   // so reopening it requires the PIN again, exactly like before encryption.
@@ -513,14 +583,26 @@ const exportBtn = document.getElementById("export-btn");
 const importBtn = document.getElementById("import-btn");
 const importInput = document.getElementById("import-input");
 
-exportBtn.addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(notes, null, 2)], { type: "application/json" });
+// Firefox (and historically Safari) don't guarantee the download has
+// actually started by the time a.click() returns synchronously — revoking
+// the object URL immediately after could invalidate it before the browser
+// gets to it, silently producing no download at all. Appending the anchor
+// to the DOM and delaying the revoke gives every browser a real chance to
+// pick it up first.
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `noteflow-export-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+exportBtn.addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(notes, null, 2)], { type: "application/json" });
+  downloadBlob(blob, `noteflow-export-${new Date().toISOString().slice(0, 10)}.json`);
 });
 
 importBtn.addEventListener("click", () => importInput.click());
@@ -734,10 +816,18 @@ const FOLDER_COVER_TEXTURES = [
   "linear-gradient(135deg, #3A6B8C, #4A5FA5)",
 ];
 
+// In-memory cache: folderDisplayColor() runs once per note card and once per
+// folder chip on every renderList() — reading + JSON.parse-ing localStorage
+// that often (every keystroke in the search box, every 30s reminder tick) is
+// wasted synchronous work for a value that only ever changes via the cover
+// swatch picker, which already goes through saveFolderCovers().
+let folderCoversCache = null;
 function loadFolderCovers() {
-  return loadPref(PREF_KEYS.folderCovers, {});
+  if (!folderCoversCache) folderCoversCache = loadPref(PREF_KEYS.folderCovers, {});
+  return folderCoversCache;
 }
 function saveFolderCovers(map) {
+  folderCoversCache = map;
   savePref(PREF_KEYS.folderCovers, map);
 }
 
@@ -831,10 +921,17 @@ function reorderNotes(targetId) {
   if (fromIndex === -1 || toIndex === -1) return;
   const [moved] = notes.splice(fromIndex, 1);
   notes.splice(toIndex, 0, moved);
-  notes.forEach((n, i) => {
-    n.order = i;
-    persistNote(n);
-  });
+  // Only the notes between the old and new position actually change order —
+  // writing all of them (IndexedDB + a Firestore setDoc each, unawaited) on
+  // every single drag was a real freeze/quota risk on a notebook with
+  // hundreds of notes, for a reorder that only ever moves one note past a
+  // contiguous run of others.
+  const lo = Math.min(fromIndex, toIndex);
+  const hi = Math.max(fromIndex, toIndex);
+  for (let i = lo; i <= hi; i++) {
+    notes[i].order = i;
+    persistNote(notes[i]);
+  }
   renderList();
 }
 
@@ -849,6 +946,16 @@ function renderFolderFilters() {
   const tags = allTags();
   folderFiltersEl.classList.toggle("hidden", folders.length === 0 && tags.length === 0);
   folderFiltersEl.innerHTML = "";
+  // One pass over notes to count exact-folder matches, instead of filtering
+  // the full notes array once per folder chip below (that O(folders × notes)
+  // scan was real: a few dozen folders over a notebook of a thousand notes
+  // means tens of thousands of comparisons on every render, including on
+  // every keystroke in the search box).
+  const exactCounts = new Map();
+  notes.forEach((n) => {
+    if (n.deletedAt || !n.folder) return;
+    exactCounts.set(n.folder, (exactCounts.get(n.folder) || 0) + 1);
+  });
   folders.forEach((folder) => {
     const parts = folder.split("/");
     const depth = parts.length - 1;
@@ -857,8 +964,12 @@ function renderFolderFilters() {
     chip.className = "tag-filter-chip folder-chip" + (activeFolderFilter === folder ? " active" : "");
     if (depth > 0) chip.style.marginLeft = `${depth * 14}px`;
     // A thicker "spine" for folders holding more notes — like books lined
-    // up on a shelf by how full they are.
-    const noteCount = notes.filter((n) => !n.deletedAt && (n.folder === folder || (n.folder || "").startsWith(folder + "/"))).length;
+    // up on a shelf by how full they are. Includes notes filed in
+    // subfolders, same as the filter itself does.
+    let noteCount = 0;
+    for (const [f, count] of exactCounts) {
+      if (f === folder || f.startsWith(folder + "/")) noteCount += count;
+    }
     chip.style.borderLeftWidth = `${Math.min(2 + Math.round(noteCount / 2), 8)}px`;
     chip.title = folder;
     const labelSpan = document.createElement("span");
@@ -1697,16 +1808,19 @@ async function noteForExport(note) {
   return note;
 }
 
+// Strips characters that are illegal (or awkward) in a filename on
+// Windows/macOS/Linux, but — unlike a \w-based allow-list — keeps accented
+// letters intact, since "Réunion d'été" turning into "Runion dt" in a
+// French-first app is its own small bug.
+function safeFilename(name) {
+  return name.replace(/[\\/:*?"<>|]+/g, "").trim();
+}
+
 document.getElementById("export-note-btn").addEventListener("click", async () => {
   await flushSave(true);
   const exportNote = await noteForExport(currentNote);
   const blob = new Blob([JSON.stringify(exportNote, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${(exportNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${safeFilename(exportNote.title || "note") || "note"}.json`);
 });
 
 // A single self-contained HTML file (inline CSS, no external requests) —
@@ -1761,12 +1875,7 @@ document.getElementById("export-webpage-btn").addEventListener("click", async ()
 </body>
 </html>`;
   const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${(currentNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.html`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${safeFilename(currentNote.title || "note") || "note"}.html`);
   showToast("Page web exportée");
 });
 
@@ -1789,12 +1898,7 @@ document.getElementById("share-encrypted-btn").addEventListener("click", async (
   const enc = await encryptString(key, payload);
   const packet = { format: "noteflow-encrypted-v1", salt: bytesToB64(salt), enc };
   const blob = new Blob([JSON.stringify(packet, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${(currentNote.title || "note").replace(/[^\w\- ]+/g, "").trim() || "note"}.noteflow`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${safeFilename(currentNote.title || "note") || "note"}.noteflow`);
   showToast("Fichier chiffré exporté");
 });
 
@@ -1828,8 +1932,12 @@ newNoteBtn.addEventListener("click", async () => {
   titleInput.focus();
 });
 
-backBtn.addEventListener("click", () => {
-  flushSave(true);
+backBtn.addEventListener("click", async () => {
+  // Must await: showList() clears a locked note's plaintext from memory,
+  // and flushSave's persistNote() briefly restores that same plaintext
+  // (to encrypt-then-restore) after its own await — if showList() ran
+  // first, that restore would race back in right after the purge.
+  await flushSave(true);
   showList();
 });
 
@@ -1953,7 +2061,7 @@ function scheduleSave() {
 function stripImagesForHistory(html) {
   const div = document.createElement("div");
   div.innerHTML = html || "";
-  div.querySelectorAll("img").forEach((img) => img.remove());
+  div.querySelectorAll("img, audio, source").forEach((el) => el.remove());
   return div.innerHTML;
 }
 
@@ -1991,6 +2099,20 @@ async function flushSave(immediate) {
     playErrorSound();
   }
 }
+
+// Flush the pending 500ms autosave debounce when the app is about to lose
+// the CPU entirely (tab closed, backgrounded, or an iOS PWA swiped away) —
+// without this, the last half-second of typing before any of those was
+// silently lost. "visibilitychange" fires reliably in all of these cases
+// (unlike "beforeunload", which iOS Safari/PWA doesn't fire); "pagehide" is
+// kept as a second signal for browsers that skip visibilitychange on close.
+function flushOnLeave() {
+  if (document.visibilityState === "hidden" && editorScreen.classList.contains("active") && currentNote) {
+    flushSave(true);
+  }
+}
+document.addEventListener("visibilitychange", flushOnLeave);
+window.addEventListener("pagehide", flushOnLeave);
 
 titleInput.addEventListener("input", scheduleSave);
 folderInput.addEventListener("change", scheduleSave);
@@ -2118,7 +2240,7 @@ const biometricSetupBtn = document.getElementById("biometric-setup-btn");
 let pendingUnlockNoteId = null;
 
 function setLockIcon(locked) {
-  lockBtn.innerHTML = `<svg class="icon"><use href="#icon-lock-${locked ? "closed" : "open"}"/></svg>`;
+  lockBtn.innerHTML = `<svg class="icon"><use href="#icon-lock-${locked ? "closed" : "open"}"/></svg>${locked ? "Retirer le verrou" : "Verrouiller"}`;
 }
 
 // --- Real encryption for locked notes (AES-GCM, key derived from the PIN via
@@ -2279,6 +2401,7 @@ let lockFailCount = 0;
 let lockLockedUntil = 0;
 
 function showLockOverlay() {
+  modalReturnFocusEl = document.activeElement;
   pendingUnlockNoteId = currentNote.id;
   lockInput.value = "";
   lockError.classList.add("hidden");
@@ -2349,6 +2472,7 @@ lockInput.addEventListener("keydown", (e) => {
 lockCancelBtn.addEventListener("click", () => {
   lockOverlay.classList.add("hidden");
   pendingUnlockNoteId = null;
+  restoreModalFocus();
   showList();
 });
 
@@ -2376,6 +2500,12 @@ lockBtn.addEventListener("click", async () => {
     textEditor.innerHTML = "";
     currentNote.html = "";
     currentNote.drawing = null;
+    // Without this, the version history array — still full of plaintext
+    // snapshots — stays in memory after locking. It's already preserved
+    // inside encBlob; leaving a second, unencrypted copy around means the
+    // next persistNote() with no active unlock key (pin from the list,
+    // archive, a reminder tick) writes it to IndexedDB/Firestore in clear.
+    currentNote.history = [];
     redrawStrokes();
     if (navigator.vibrate) navigator.vibrate(15);
     showToast("Note verrouillée et chiffrée");
@@ -2459,17 +2589,38 @@ reminderClearBtn.addEventListener("click", () => {
   showToast("Rappel supprimé");
 });
 
+function notifyReminder(note) {
+  const title = note.title || "Rappel NoteFlow";
+  const body = "Touche pour ouvrir ta note.";
+  if (!("Notification" in window) || Notification.permission !== "granted") {
+    showToast(`Rappel : ${note.title || "Sans titre"}`);
+    return;
+  }
+  // Chrome on Android (and so any Chromium-based installed PWA there) throws
+  // "Illegal constructor" on `new Notification(...)` — notifications must go
+  // through the service worker registration there. A single throw used to
+  // abort the whole forEach below, silently dropping every other reminder
+  // due that tick (each had already been marked reminderFired first).
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.ready
+      .then((reg) => reg.showNotification(title, { body }))
+      .catch(() => showToast(`Rappel : ${note.title || "Sans titre"}`));
+    return;
+  }
+  try {
+    new Notification(title, { body });
+  } catch {
+    showToast(`Rappel : ${note.title || "Sans titre"}`);
+  }
+}
+
 setInterval(() => {
   const now = Date.now();
   notes.forEach((note) => {
     if (note.reminderAt && !note.reminderFired && note.reminderAt <= now) {
       note.reminderFired = true;
       persistNote(note);
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification(note.title || "Rappel NoteFlow", { body: "Touche pour ouvrir ta note." });
-      } else {
-        showToast(`Rappel : ${note.title || "Sans titre"}`);
-      }
+      notifyReminder(note);
       if (listScreen.classList.contains("active")) renderList();
     }
   });
@@ -3144,6 +3295,7 @@ imageInput.addEventListener("change", () => {
 const voiceNoteBtn = document.getElementById("voice-note-btn");
 let activeRecorder = null;
 let audioChunks = [];
+let recordingNoteId = null;
 
 function setVoiceBtnRecording(recording) {
   setPressed(voiceNoteBtn, recording);
@@ -3162,6 +3314,7 @@ voiceNoteBtn.addEventListener("click", async () => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
+    recordingNoteId = currentNote ? currentNote.id : null;
     activeRecorder = new MediaRecorder(stream);
     activeRecorder.addEventListener("dataavailable", (e) => {
       if (e.data.size) audioChunks.push(e.data);
@@ -3171,6 +3324,15 @@ voiceNoteBtn.addEventListener("click", async () => {
       const blob = new Blob(audioChunks, { type: "audio/webm" });
       const reader = new FileReader();
       reader.onload = () => {
+        setVoiceBtnRecording(false);
+        // If the editor was left mid-recording, there's no safe target note
+        // to insert into anymore (recordingNoteId no longer matches what's
+        // open, or nothing is open at all) — drop it rather than inserting
+        // into whatever note happens to be open now.
+        if (!editorScreen.classList.contains("active") || !currentNote || currentNote.id !== recordingNoteId) {
+          showToast("Enregistrement annulé (note fermée pendant l'enregistrement)");
+          return;
+        }
         restoreSelection();
         const audio = document.createElement("audio");
         audio.controls = true;
@@ -3184,7 +3346,10 @@ voiceNoteBtn.addEventListener("click", async () => {
           textEditor.appendChild(audio);
         }
         scheduleSave();
+      };
+      reader.onerror = () => {
         setVoiceBtnRecording(false);
+        showToast("Échec de l'enregistrement audio");
       };
       reader.readAsDataURL(blob);
     });
@@ -3812,10 +3977,20 @@ function redrawStrokes() {
   const rect = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
   const strokes = (currentNote.drawing && currentNote.drawing.strokes) || [];
-  strokes.forEach((stroke) => drawStroke(stroke));
+  strokes.forEach((stroke) => drawStroke(stroke, rect));
 }
 
-function drawStroke(stroke) {
+// Stroke points are stored as fractions (0-1) of the canvas size at the
+// moment they were drawn, not raw pixels: a page is exactly as tall as its
+// text content, so its canvas resizes constantly (typing more text, "Agrandir
+// la page", rotating a phone, opening the same note on a wider screen). Raw
+// pixel points would stay put while the canvas around them changed size,
+// visibly drifting away from the text they were meant to mark up.
+function toCanvasPixels(point, rect) {
+  return { x: point.x * rect.width, y: point.y * rect.height };
+}
+
+function drawStroke(stroke, rect) {
   if (stroke.points.length < 1) return;
   ctx.save();
   ctx.globalCompositeOperation = stroke.erase ? "destination-out" : "source-over";
@@ -3826,8 +4001,9 @@ function drawStroke(stroke) {
   ctx.lineCap = stroke.highlight ? "square" : "round";
   ctx.beginPath();
   stroke.points.forEach((p, i) => {
-    if (i === 0) ctx.moveTo(p.x, p.y);
-    else ctx.lineTo(p.x, p.y);
+    const px = toCanvasPixels(p, rect);
+    if (i === 0) ctx.moveTo(px.x, px.y);
+    else ctx.lineTo(px.x, px.y);
   });
   ctx.stroke();
   ctx.restore();
@@ -3835,7 +4011,7 @@ function drawStroke(stroke) {
 
 function pointerPos(e) {
   const rect = canvas.getBoundingClientRect();
-  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
 }
 
 canvas.addEventListener("pointerdown", (e) => {
@@ -3849,9 +4025,12 @@ canvas.addEventListener("pointerdown", (e) => {
 
 canvas.addEventListener("pointermove", (e) => {
   if (!activeStroke) return;
+  const rect = canvas.getBoundingClientRect();
   const pos = pointerPos(e);
   const prev = activeStroke.points[activeStroke.points.length - 1];
   activeStroke.points.push(pos);
+  const prevPx = toCanvasPixels(prev, rect);
+  const posPx = toCanvasPixels(pos, rect);
   ctx.save();
   ctx.globalCompositeOperation = activeStroke.erase ? "destination-out" : "source-over";
   ctx.globalAlpha = activeStroke.highlight ? 0.4 : 1;
@@ -3860,8 +4039,8 @@ canvas.addEventListener("pointermove", (e) => {
   ctx.lineJoin = "round";
   ctx.lineCap = activeStroke.highlight ? "square" : "round";
   ctx.beginPath();
-  ctx.moveTo(prev.x, prev.y);
-  ctx.lineTo(pos.x, pos.y);
+  ctx.moveTo(prevPx.x, prevPx.y);
+  ctx.lineTo(posPx.x, posPx.y);
   ctx.stroke();
   ctx.restore();
 });
@@ -3957,7 +4136,15 @@ let syncDb = null;
 let syncCode = "";
 let syncFns = null;
 let unsubscribeSnapshot = null;
-let applyingRemoteChange = false;
+// A Set of note ids, not a single flag: a global boolean meant that any
+// local edit autosaved during the awaits inside handleRemoteSnapshot (typing
+// in an unrelated note while a snapshot for a different note was still
+// being applied) got written to IndexedDB but silently skipped its
+// Firestore push — the edit only existed locally until the next remote
+// snapshot overwrote it. Scoping the guard to the specific id being applied
+// fixes that without losing the original protection (don't echo a remote
+// change straight back to Firestore).
+let applyingRemoteChangeIds = new Set();
 
 syncToggle.addEventListener("click", () => syncPanel.classList.toggle("hidden"));
 
@@ -4003,9 +4190,9 @@ async function startSync(config, code) {
 }
 
 async function handleRemoteSnapshot(snapshot) {
-  applyingRemoteChange = true;
   for (const change of snapshot.docChanges()) {
     const remote = change.doc.data();
+    applyingRemoteChangeIds.add(remote.id);
     const localIndex = notes.findIndex((n) => n.id === remote.id);
     if (change.type === "removed") {
       if (localIndex !== -1) {
@@ -4013,6 +4200,18 @@ async function handleRemoteSnapshot(snapshot) {
         await dbDelete(remote.id);
       }
     } else if (localIndex === -1 || remote.updatedAt > notes[localIndex].updatedAt) {
+      // Never apply a remote snapshot over a note with an unsaved edit still
+      // pending (autosave debounce in flight): replacing textEditor.innerHTML
+      // mid-keystroke jumps the caret to the start and can drop the current
+      // paragraph, and swapping the `notes[localIndex]` object reference out
+      // from under `currentNote` would desync the two silently. Skipping
+      // here is safe — the pending flush stamps its own updatedAt = now, so
+      // it will win the comparison above on the *next* remote snapshot and
+      // push the local edit back out once the user is done typing.
+      if (currentNote && currentNote.id === remote.id && editorScreen.classList.contains("active") && saveTimer) {
+        applyingRemoteChangeIds.delete(remote.id);
+        continue;
+      }
       if (remote.html) remote.html = sanitizeNoteHtml(remote.html);
       if (localIndex === -1) notes.unshift(remote);
       else notes[localIndex] = remote;
@@ -4022,8 +4221,8 @@ async function handleRemoteSnapshot(snapshot) {
         loadNoteIntoEditor();
       }
     }
+    applyingRemoteChangeIds.delete(remote.id);
   }
-  applyingRemoteChange = false;
   if (listScreen.classList.contains("active")) renderList();
 }
 
@@ -4043,7 +4242,7 @@ async function persistNote(note) {
     note.history = [];
   }
   await dbPut(note);
-  if (syncDb && syncCode && !applyingRemoteChange) {
+  if (syncDb && syncCode && !applyingRemoteChangeIds.has(note.id)) {
     try {
       await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), note);
     } catch (err) {
@@ -4059,7 +4258,7 @@ async function persistNote(note) {
 
 async function removeNoteEverywhere(id) {
   await dbDelete(id);
-  if (syncDb && syncCode && !applyingRemoteChange) {
+  if (syncDb && syncCode && !applyingRemoteChangeIds.has(id)) {
     try {
       await syncFns.deleteDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", id));
     } catch (err) {
@@ -4184,17 +4383,50 @@ let cmdkActiveIndex = 0;
 
 function closeCommandPalette() {
   cmdkOverlay.classList.add("hidden");
+  restoreModalFocus();
 }
 
 function openCommandPalette() {
+  modalReturnFocusEl = document.activeElement;
   cmdkOverlay.classList.remove("hidden");
   cmdkInput.value = "";
   renderCmdkResults("");
   setTimeout(() => cmdkInput.focus(), 30);
 }
 
-function goToNote(id) {
-  if (editorScreen.classList.contains("active")) flushSave(true);
+// --- Modal focus trap: while the command palette or the lock overlay is
+// open, Tab/Shift+Tab stay inside it instead of leaking into the screen
+// underneath (which the user believes is inaccessible — most concretely,
+// tabbing "through" a locked note's overlay used to land back in that
+// note's own editor). Focus returns to whatever opened the modal on close.
+let modalReturnFocusEl = null;
+
+function restoreModalFocus() {
+  if (modalReturnFocusEl && document.body.contains(modalReturnFocusEl)) modalReturnFocusEl.focus();
+  modalReturnFocusEl = null;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const openModal = [cmdkOverlay, lockOverlay].find((el) => !el.classList.contains("hidden"));
+  if (!openModal) return;
+  const focusable = Array.from(
+    openModal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+  ).filter((el) => !el.disabled && el.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+});
+
+async function goToNote(id) {
+  if (editorScreen.classList.contains("active")) await flushSave(true);
   showList();
   openNote(id);
 }

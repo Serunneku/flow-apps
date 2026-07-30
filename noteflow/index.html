@@ -353,7 +353,7 @@
     <button id="toast-undo" type="button">Annuler</button>
   </div>
 
-  <div id="command-palette" class="command-palette hidden">
+  <div id="command-palette" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Palette de commandes">
     <div class="cmdk-box">
       <div class="cmdk-input-row">
         <svg class="icon"><use href="#icon-search"/></svg>
@@ -363,9 +363,9 @@
     </div>
   </div>
 
-  <div id="lock-overlay" class="lock-overlay hidden">
+  <div id="lock-overlay" class="lock-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="lock-title">
     <div class="lock-box">
-      <p class="lock-title"><svg class="icon"><use href="#icon-lock-closed"/></svg> Note verrouillée</p>
+      <p class="lock-title" id="lock-title"><svg class="icon"><use href="#icon-lock-closed"/></svg> Note verrouillée</p>
       <input id="lock-input" type="password" inputmode="numeric" class="lock-input" placeholder="Code" autocomplete="off" />
       <p id="lock-error" class="lock-error hidden">Code incorrect</p>
       <div class="sync-actions">
