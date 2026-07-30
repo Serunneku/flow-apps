@@ -219,7 +219,13 @@ themeToggle.addEventListener("click", (e) => {
 
 // --- Daily streak (local, based on days with at least one save) ---
 const streakBadge = document.getElementById("streak-badge");
-const dateKey = (ts) => new Date(ts).toISOString().slice(0, 10);
+// Local calendar day, not UTC: toISOString() rolls over at midnight UTC,
+// so writing between midnight and 1-2am in France (UTC+1/+2) used to count
+// against the *previous* day and could silently break the streak.
+const dateKey = (ts) => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 function updateStreakBadge() {
   const count = loadPref(PREF_KEYS.streakCount, 0);
@@ -243,6 +249,8 @@ updateStreakBadge();
 function setupMenu(btnId, panelId) {
   const btn = document.getElementById(btnId);
   const panel = document.getElementById(panelId);
+  panel.setAttribute("role", "menu");
+  panel.querySelectorAll(".menu-item").forEach((item) => item.setAttribute("role", "menuitem"));
   btn.setAttribute("aria-haspopup", "menu");
   btn.setAttribute("aria-expanded", "false");
   btn.addEventListener("click", (e) => {
@@ -263,6 +271,16 @@ function setupMenu(btnId, panelId) {
   });
   return panel;
 }
+// Escape closing a menu used to leave focus stranded on whatever was under
+// the pointer (or nowhere) instead of back on the button that opened it.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  document.querySelectorAll(".menu-wrap").forEach((wrap) => {
+    const panel = wrap.querySelector(".menu-panel");
+    const btn = wrap.querySelector(".icon-btn");
+    if (panel && btn && !panel.classList.contains("hidden")) btn.focus();
+  });
+});
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".menu-wrap")) {
     document.querySelectorAll(".menu-panel").forEach((p) => p.classList.add("hidden"));
@@ -738,6 +756,14 @@ importInput.addEventListener("change", async () => {
       for (const note of imported) {
         if (!note || !note.id) continue;
         if (note.html) note.html = sanitizeNoteHtml(note.html);
+        // A hand-edited or corrupted export can be missing fields the rest
+        // of the app assumes exist: no updatedAt broke sort ordering (NaN),
+        // and locked: true with neither encBlob nor pinCode made a note
+        // permanently unopenable (every unlock attempt hit the same
+        // "no pin set" throw, forever, with no way back in).
+        if (typeof note.updatedAt !== "number" || Number.isNaN(note.updatedAt)) note.updatedAt = Date.now();
+        if (typeof note.createdAt !== "number" || Number.isNaN(note.createdAt)) note.createdAt = note.updatedAt;
+        if (note.locked && !note.encBlob && !note.pinCode) note.locked = false;
         const index = notes.findIndex((n) => n.id === note.id);
         if (index === -1) {
           notes.push(note);
@@ -959,8 +985,13 @@ function renderFolderFilters() {
   folders.forEach((folder) => {
     const parts = folder.split("/");
     const depth = parts.length - 1;
-    const chip = document.createElement("button");
-    chip.type = "button";
+    // A <div role="button">, not a <button>: it hosts a real, independently
+    // focusable <button> (the cover swatch) as a child, and interactive
+    // content nested inside a native <button> is invalid HTML that browsers
+    // handle inconsistently for keyboard/AT users.
+    const chip = document.createElement("div");
+    chip.setAttribute("role", "button");
+    chip.tabIndex = 0;
     chip.className = "tag-filter-chip folder-chip" + (activeFolderFilter === folder ? " active" : "");
     if (depth > 0) chip.style.marginLeft = `${depth * 14}px`;
     // A thicker "spine" for folders holding more notes — like books lined
@@ -974,10 +1005,12 @@ function renderFolderFilters() {
     chip.title = folder;
     const labelSpan = document.createElement("span");
     labelSpan.textContent = (depth > 0 ? "↳ " : "") + parts[parts.length - 1];
-    const coverSwatch = document.createElement("span");
+    const coverSwatch = document.createElement("button");
+    coverSwatch.type = "button";
     coverSwatch.className = "folder-cover-swatch";
     coverSwatch.style.background = folderDisplayColor(folder);
     coverSwatch.title = "Choisir une couverture pour ce dossier";
+    coverSwatch.setAttribute("aria-label", "Choisir une couverture pour ce dossier");
     coverSwatch.addEventListener("click", (e) => {
       e.stopPropagation();
       const covers = loadFolderCovers();
@@ -988,6 +1021,12 @@ function renderFolderFilters() {
     });
     chip.appendChild(labelSpan);
     chip.appendChild(coverSwatch);
+    chip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        chip.click();
+      }
+    });
     chip.addEventListener("click", () => {
       activeFolderFilter = activeFolderFilter === folder ? null : folder;
       renderList();
@@ -1214,7 +1253,18 @@ function renderList() {
 
   notesListEl.classList.toggle("manual-mode", sortMode === "manual");
   notesListEl.innerHTML = "";
-  notesEmptyEl.classList.toggle("show", visible.length === 0);
+  const isEmpty = visible.length === 0;
+  notesEmptyEl.classList.toggle("show", isEmpty);
+  if (isEmpty) {
+    // The static "Touche + pour commencer" message was misleading whenever
+    // the empty result came from a search, a folder/tag filter, or the
+    // trash/archive view rather than an actually empty notebook.
+    if (query) notesEmptyEl.textContent = "Aucune note ne correspond à ta recherche.";
+    else if (activeFolderFilter || activeTagFilter) notesEmptyEl.textContent = "Aucune note dans ce filtre.";
+    else if (listView === "trash") notesEmptyEl.textContent = "La corbeille est vide.";
+    else if (listView === "archived") notesEmptyEl.textContent = "Aucune note archivée.";
+    else notesEmptyEl.textContent = "Aucune note pour l'instant. Touche « + » pour commencer.";
+  }
 
   visible.forEach((note, index) => {
     const li = document.createElement("li");
@@ -2073,6 +2123,11 @@ function pushHistorySnapshot() {
 
 async function flushSave(immediate) {
   if (!currentNote) return;
+  // Scoped here rather than inside persistNote(): persistNote is also
+  // called by background machinery (the reminder/ephemeral-expiry interval,
+  // Firestore sync) that isn't the user actually writing — counting those
+  // toward the streak meant a day with zero typing could still "extend" it.
+  recordActivityToday();
   clearTimeout(saveTimer);
   const newTitle = titleInput.value.trim();
   const newHtml = textEditor.innerHTML;
@@ -3299,7 +3354,12 @@ let recordingNoteId = null;
 
 function setVoiceBtnRecording(recording) {
   setPressed(voiceNoteBtn, recording);
-  voiceNoteBtn.title = recording ? "Arrêter l'enregistrement" : "Enregistrer une note vocale";
+  const label = recording ? "Arrêter l'enregistrement" : "Enregistrer une note vocale";
+  voiceNoteBtn.title = label;
+  // The one-time "title -> aria-label" pass at load time froze this to the
+  // idle label forever; without updating it here too, a screen reader never
+  // announced that recording had actually started.
+  voiceNoteBtn.setAttribute("aria-label", label);
 }
 
 voiceNoteBtn.addEventListener("click", async () => {
@@ -3554,6 +3614,9 @@ replaceAllBtn.addEventListener("click", () => {
   const term = findInput.value;
   if (!term) return;
   const replacement = replaceInput.value;
+  // Undoable via the version history panel, since there's no confirmation
+  // step before a bulk replace goes through.
+  pushHistorySnapshot();
   const walker = document.createTreeWalker(textEditor, NodeFilter.SHOW_TEXT);
   const needle = term.toLowerCase();
   let replaced = 0;
@@ -4227,7 +4290,6 @@ async function handleRemoteSnapshot(snapshot) {
 }
 
 async function persistNote(note) {
-  recordActivityToday();
   // A locked note is never written to IndexedDB/Firestore in clear: while an
   // unlock key is active for it, its body/drawing/history are swapped for an
   // AES-GCM ciphertext just for the write, then restored in memory right after.
@@ -4241,22 +4303,31 @@ async function persistNote(note) {
     note.drawing = null;
     note.history = [];
   }
-  await dbPut(note);
-  if (syncDb && syncCode && !applyingRemoteChangeIds.has(note.id)) {
-    try {
-      await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), note);
-    } catch (err) {
-      console.warn("sync push failed", err);
+  try {
+    await dbPut(note);
+    if (syncDb && syncCode && !applyingRemoteChangeIds.has(note.id)) {
+      try {
+        await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), note);
+      } catch (err) {
+        console.warn("sync push failed", err);
+      }
     }
-  }
-  if (restore) {
-    note.html = restore.html;
-    note.drawing = restore.drawing;
-    note.history = restore.history;
+  } finally {
+    // In a finally, not just after: if dbPut() threw (quota exceeded, say),
+    // the in-memory note was left with html/drawing/history wiped out by the
+    // encrypt-for-write swap above, with no write having actually succeeded
+    // to justify that — flushSave's own catch block would report "Erreur"
+    // while the open note silently looked empty.
+    if (restore) {
+      note.html = restore.html;
+      note.drawing = restore.drawing;
+      note.history = restore.history;
+    }
   }
 }
 
 async function removeNoteEverywhere(id) {
+  previewCache.delete(id);
   await dbDelete(id);
   if (syncDb && syncCode && !applyingRemoteChangeIds.has(id)) {
     try {
@@ -4289,6 +4360,12 @@ syncDisableBtn.addEventListener("click", () => {
   localStorage.removeItem(SYNC_KEYS.config);
   localStorage.removeItem(SYNC_KEYS.code);
   if (unsubscribeSnapshot) unsubscribeSnapshot();
+  // Leaving these set meant a second "Activer" click after disabling could
+  // call an already-unsubscribed listener, or briefly get treated as still
+  // mid-remote-application.
+  unsubscribeSnapshot = null;
+  syncFns = null;
+  applyingRemoteChangeIds.clear();
   syncDb = null;
   syncCode = "";
   setSyncStatus("Synchronisation non configurée");
@@ -4368,6 +4445,14 @@ document.addEventListener("keydown", (e) => {
   if (key === "s") {
     e.preventDefault();
     flushSave(false);
+  } else if (key === "f") {
+    // Otherwise ⌘F only ever opened the browser's own find bar in the
+    // editor, even though a real find/replace panel exists right there —
+    // inconsistent with the list screen, where ⌘F already focuses search.
+    e.preventDefault();
+    findPanel.classList.remove("hidden");
+    findInput.focus();
+    updateFindCount();
   }
   // Ctrl/Cmd+B, +I, +U are left to the browser's native contenteditable
   // handling (calling execCommand ourselves on top of it double-toggles
