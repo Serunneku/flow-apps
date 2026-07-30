@@ -4966,6 +4966,86 @@ function insertWikilinkAt(node, start, end, target) {
   scheduleSave();
 }
 
+// --- Smart link suggestions: no need to type [[ at all — finishing a word
+// run that happens to match an existing note's title pops a small "Lier
+// vers « X » ?" chip near the caret, one click away from a real wikilink. ---
+const linkSuggestionEl = document.getElementById("link-suggestion-popup");
+const linkSuggestionTextEl = linkSuggestionEl.querySelector(".link-suggestion-text");
+let linkSuggestionState = null;
+let dismissedLinkSuggestionTitle = null;
+
+function hideLinkSuggestion() {
+  linkSuggestionEl.classList.add("hidden");
+  linkSuggestionState = null;
+}
+
+function showLinkSuggestion(node, start, end, note, title) {
+  linkSuggestionState = { node, start, end, target: note };
+  linkSuggestionTextEl.textContent = `Lier vers « ${title} » ?`;
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  const rect = range.getBoundingClientRect();
+  const pageRect = notePage.getBoundingClientRect();
+  linkSuggestionEl.style.left = `${rect.left - pageRect.left}px`;
+  linkSuggestionEl.style.top = `${rect.bottom - pageRect.top + 4}px`;
+  linkSuggestionEl.classList.remove("hidden");
+}
+
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) {
+    hideLinkSuggestion();
+    return;
+  }
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) {
+    hideLinkSuggestion();
+    return;
+  }
+  const offset = sel.getRangeAt(0).startOffset;
+  const text = node.textContent.slice(0, offset);
+  // The [[ / ![[ typed-link flows already have their own UX — don't pile a
+  // second suggestion popup on top while one of those is in progress.
+  if (/!?\[\[[^[\]]*$/.test(text)) {
+    hideLinkSuggestion();
+    return;
+  }
+  const tail = text.slice(-80);
+  let best = null;
+  notesInActiveVault().forEach((n) => {
+    if (n.deletedAt || n.id === currentNote.id) return;
+    const title = (n.title || "").trim();
+    if (title.length < 4) return;
+    const idx = tail.toLowerCase().lastIndexOf(title.toLowerCase());
+    if (idx === -1 || idx + title.length !== tail.length) return;
+    const before = tail[idx - 1];
+    if (before !== undefined && /[a-z0-9à-ÿ]/i.test(before)) return;
+    if (!best || title.length > best.title.length) best = { note: n, title };
+  });
+  if (!best) {
+    hideLinkSuggestion();
+    dismissedLinkSuggestionTitle = null;
+    return;
+  }
+  if (dismissedLinkSuggestionTitle === best.title) return;
+  showLinkSuggestion(node, offset - best.title.length, offset, best.note, best.title);
+});
+
+document.getElementById("link-suggestion-accept").addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  if (!linkSuggestionState) return;
+  const { node, start, end, target } = linkSuggestionState;
+  insertWikilinkAt(node, start, end, target);
+  hideLinkSuggestion();
+});
+document.getElementById("link-suggestion-dismiss").addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  if (linkSuggestionState) dismissedLinkSuggestionTitle = linkSuggestionTextEl.textContent.replace(/^Lier vers « | » \?$/g, "");
+  hideLinkSuggestion();
+});
+textEditor.addEventListener("blur", () => setTimeout(hideLinkSuggestion, 150));
+
 async function chooseWikilinkAutocomplete(index) {
   if (!wikilinkAcRange || !wikilinkAcItems[index]) return;
   const { node, start, end } = wikilinkAcRange;

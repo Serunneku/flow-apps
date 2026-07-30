@@ -2736,6 +2736,35 @@ a:focus-visible,
   animation: fadeIn 0.12s var(--ease);
 }
 
+.link-suggestion-popup {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--paper);
+  color: var(--paper-text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-hover);
+  font-size: 12px;
+  animation: fadeIn 0.12s var(--ease);
+}
+
+.link-suggestion-popup .link-suggestion-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.link-suggestion-popup .link-btn {
+  padding: 3px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .wikilink-autocomplete-item {
   padding: 8px 10px;
   border-radius: 8px;
