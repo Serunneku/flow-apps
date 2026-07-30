@@ -1508,7 +1508,15 @@ function parseSearchQuery(raw) {
 }
 
 function noteHaystack(note) {
-  return (note.title + " " + (note.folder || "") + " " + (note.tags || []).join(" ") + " " + (note.locked ? "" : getPreview(note))).toLowerCase();
+  return (
+    note.title +
+    " " +
+    (note.folder || "") +
+    " " +
+    (note.tags || []).join(" ") +
+    " " +
+    (note.locked ? "" : getPreview(note) + " " + (note.ocrText || ""))
+  ).toLowerCase();
 }
 
 function clauseMatches(note, clause) {
@@ -2088,6 +2096,7 @@ function newNoteObject() {
     paperStyle: "blank",
     archived: false,
     deletedAt: null,
+    ocrText: "",
   };
 }
 
@@ -5562,6 +5571,7 @@ async function insertImageFile(file) {
     textEditor.appendChild(img);
   }
   scheduleSave();
+  indexImageTextForNote(currentNote, dataUrl);
 }
 
 imageInput.addEventListener("change", () => {
@@ -5723,6 +5733,27 @@ function getTesseractWorker() {
     tesseractWorkerPromise = loadTesseract().then((Tesseract) => Tesseract.createWorker("fra"));
   }
   return tesseractWorkerPromise;
+}
+
+// Runs OCR on every inserted/pasted photo in the background — no toast, no
+// visible text added to the note — just folds whatever text it finds into
+// note.ocrText so the image becomes findable via the normal search box
+// (noteHaystack() includes it). A silent best-effort: offline or a CDN
+// hiccup just means that one image stays un-indexed, same as not having
+// OCR at all.
+async function indexImageTextForNote(note, dataUrl) {
+  try {
+    const worker = await getTesseractWorker();
+    const { data } = await worker.recognize(dataUrl);
+    const text = (data.text || "").trim();
+    if (!text) return;
+    const existing = note.ocrText || "";
+    if (existing.includes(text)) return;
+    note.ocrText = (existing + " " + text).trim();
+    persistNote(note);
+  } catch {
+    /* offline or CDN unreachable — silent, this is a background enhancement */
+  }
 }
 
 function insertTextAtCursor(text) {
