@@ -6666,6 +6666,7 @@ const clearDrawBtn = document.getElementById("clear-draw-btn");
 const eraserBtn = document.getElementById("eraser-btn");
 const penBtn = document.getElementById("pen-btn");
 const highlighterBtn = document.getElementById("highlighter-btn");
+const shapeRecognitionBtn = document.getElementById("shape-recognition-btn");
 const drawHint = document.getElementById("draw-hint");
 
 const COLORS = ["#1d1d1f", "#a13d3d", "#a8752c", "#3d6b52", "#3a5a8c", "#6b4a8c"];
@@ -6675,6 +6676,9 @@ let drawWidth = 3;
 let isErasing = false;
 let isHighlighting = false;
 let activeStroke = null;
+
+const SHAPE_RECOGNITION_PREF_KEY = "noteflow.shapeRecognition";
+let shapeRecognitionEnabled = loadPref(SHAPE_RECOGNITION_PREF_KEY, false);
 
 function setTool(tool) {
   isErasing = tool === "eraser";
@@ -6712,6 +6716,13 @@ renderColorRow();
 
 penBtn.addEventListener("click", () => setTool("pen"));
 highlighterBtn.addEventListener("click", () => setTool("highlighter"));
+setPressed(shapeRecognitionBtn, shapeRecognitionEnabled);
+shapeRecognitionBtn.addEventListener("click", () => {
+  shapeRecognitionEnabled = !shapeRecognitionEnabled;
+  savePref(SHAPE_RECOGNITION_PREF_KEY, shapeRecognitionEnabled);
+  setPressed(shapeRecognitionBtn, shapeRecognitionEnabled);
+  showToast(shapeRecognitionEnabled ? "Lissage des formes activé" : "Lissage des formes désactivé");
+});
 
 // Each tool remembers its own width — a thin pen and a fat eraser don't have
 // to fight over one shared slider position — and the eraser's range starts
@@ -6859,12 +6870,80 @@ function snapHighlightStroke(stroke) {
   ];
 }
 
+// --- Shape recognition: a hand-drawn stroke that's nearly straight becomes
+// a clean line; one that loops back close to where it started and stays
+// roughly equidistant from its own centroid becomes a clean ellipse. Only
+// runs when the toggle is on and only for plain pen strokes (never
+// highlighter, which already gets its own straight-bar treatment, or the
+// eraser, which has no shape to speak of). ---
+function strokeBoundingBox(points) {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+}
+
+function pointDist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function recognizeShape(stroke) {
+  const pts = stroke.points;
+  if (pts.length < 6) return;
+  const box = strokeBoundingBox(pts);
+  const diag = Math.hypot(box.maxX - box.minX, box.maxY - box.minY);
+  if (diag < 0.01) return;
+  const start = pts[0];
+  const end = pts[pts.length - 1];
+
+  // Straight line: every point stays close to the segment joining the
+  // stroke's own start and end.
+  const lineLen = pointDist(start, end) || 1e-6;
+  const dx = (end.x - start.x) / lineLen;
+  const dy = (end.y - start.y) / lineLen;
+  let maxDeviation = 0;
+  pts.forEach((p) => {
+    const t = (p.x - start.x) * dx + (p.y - start.y) * dy;
+    const projX = start.x + t * dx;
+    const projY = start.y + t * dy;
+    maxDeviation = Math.max(maxDeviation, pointDist(p, { x: projX, y: projY }));
+  });
+  if (maxDeviation < diag * 0.045) {
+    stroke.points = [start, end];
+    return;
+  }
+
+  // Closed loop close to circular/elliptical: the path ends near where it
+  // started, and every point sits at roughly the same distance from the
+  // stroke's centroid.
+  if (pointDist(start, end) > diag * 0.3) return;
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  const radii = pts.map((p) => pointDist(p, { x: cx, y: cy }));
+  const meanR = radii.reduce((s, r) => s + r, 0) / radii.length;
+  if (meanR < 1e-6) return;
+  const variance = radii.reduce((s, r) => s + (r - meanR) ** 2, 0) / radii.length;
+  const relSpread = Math.sqrt(variance) / meanR;
+  if (relSpread > 0.28) return;
+  const rx = (box.maxX - box.minX) / 2;
+  const ry = (box.maxY - box.minY) / 2;
+  const ellipse = [];
+  const steps = 40;
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    ellipse.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+  }
+  stroke.points = ellipse;
+}
+
 function endStroke() {
   if (!activeStroke) return;
   const stroke = activeStroke;
   activeStroke = null;
   if (stroke.highlight) {
     snapHighlightStroke(stroke);
+    redrawStrokes();
+  } else if (shapeRecognitionEnabled && !stroke.erase) {
+    recognizeShape(stroke);
     redrawStrokes();
   }
   scheduleSave();
