@@ -2184,7 +2184,14 @@ function stripImagesForHistory(html) {
 function pushHistorySnapshot() {
   if (!currentNote.history) currentNote.history = [];
   currentNote.history.push({ title: currentNote.title, html: stripImagesForHistory(currentNote.html), ts: Date.now() });
-  if (currentNote.history.length > 20) currentNote.history.shift();
+  // Pinned milestones ("avant refonte") are exempt from the rolling 20-slot
+  // cap: find the oldest *unpinned* entry to drop instead of always
+  // dropping index 0, which would silently delete a milestone the user
+  // explicitly asked to keep.
+  if (currentNote.history.length > 20) {
+    const dropIndex = currentNote.history.findIndex((s) => !s.pinned);
+    if (dropIndex !== -1) currentNote.history.splice(dropIndex, 1);
+  }
 }
 
 async function flushSave(immediate) {
@@ -2802,6 +2809,67 @@ historyBtn.addEventListener("click", () => {
   if (opening) renderHistory();
 });
 
+// Word-level diff (classic LCS backtrack) between two plain-text strings —
+// capped, since the DP table is O(n*m): a note has to be genuinely huge
+// (a few thousand words on both sides) before this becomes noticeably slow.
+const DIFF_WORD_CAP = 4000;
+function diffWords(oldText, newText) {
+  const a = oldText.split(/(\s+)/).filter((w) => w !== "");
+  const b = newText.split(/(\s+)/).filter((w) => w !== "");
+  if (a.length > DIFF_WORD_CAP || b.length > DIFF_WORD_CAP) return null;
+  const n = a.length;
+  const m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  let i = 0;
+  let j = 0;
+  const parts = [];
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      parts.push({ type: "same", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      parts.push({ type: "del", text: a[i] });
+      i++;
+    } else {
+      parts.push({ type: "ins", text: b[j] });
+      j++;
+    }
+  }
+  while (i < n) parts.push({ type: "del", text: a[i++] });
+  while (j < m) parts.push({ type: "ins", text: b[j++] });
+  return parts;
+}
+
+function renderDiffView(container, snap) {
+  const oldText = stripHtml(snap.html);
+  const newText = stripHtml(currentNote.html);
+  const parts = diffWords(oldText, newText);
+  container.innerHTML = "";
+  if (!parts) {
+    container.textContent = "Note trop volumineuse pour un aperçu détaillé.";
+    return;
+  }
+  if (!parts.some((p) => p.type !== "same")) {
+    container.textContent = "Identique au contenu actuel.";
+    return;
+  }
+  parts.forEach((p) => {
+    if (p.type === "same") {
+      container.appendChild(document.createTextNode(p.text));
+    } else {
+      const mark = document.createElement(p.type === "del" ? "del" : "ins");
+      mark.textContent = p.text;
+      container.appendChild(mark);
+    }
+  });
+}
+
 function renderHistory() {
   const history = currentNote.history || [];
   historyListEl.innerHTML = "";
@@ -2812,12 +2880,44 @@ function renderHistory() {
   [...history].reverse().forEach((snap) => {
     const li = document.createElement("li");
     li.className = "history-item";
+    const row = document.createElement("div");
+    row.className = "history-row";
     const label = document.createElement("span");
-    label.textContent = new Date(snap.ts).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Restaurer";
-    btn.addEventListener("click", () => {
+    const dateLabel = new Date(snap.ts).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    label.textContent = snap.pinned ? `📌 ${snap.label || "Jalon"} — ${dateLabel}` : dateLabel;
+    const diffBox = document.createElement("div");
+    diffBox.className = "history-diff hidden";
+    const compareBtn = document.createElement("button");
+    compareBtn.type = "button";
+    compareBtn.className = "link-btn";
+    compareBtn.textContent = "Comparer";
+    compareBtn.addEventListener("click", () => {
+      const hidden = diffBox.classList.contains("hidden");
+      if (hidden) renderDiffView(diffBox, snap);
+      diffBox.classList.toggle("hidden");
+      compareBtn.textContent = hidden ? "Masquer" : "Comparer";
+    });
+    const pinBtn = document.createElement("button");
+    pinBtn.type = "button";
+    pinBtn.className = "link-btn";
+    pinBtn.textContent = snap.pinned ? "Détacher" : "Épingler";
+    pinBtn.addEventListener("click", () => {
+      if (snap.pinned) {
+        snap.pinned = false;
+        snap.label = null;
+      } else {
+        const name = window.prompt("Nom de ce jalon :", "Jalon");
+        if (!name) return;
+        snap.pinned = true;
+        snap.label = name.trim();
+      }
+      scheduleSave();
+      renderHistory();
+    });
+    const restoreBtn = document.createElement("button");
+    restoreBtn.type = "button";
+    restoreBtn.textContent = "Restaurer";
+    restoreBtn.addEventListener("click", () => {
       pushHistorySnapshot();
       currentNote.title = snap.title;
       currentNote.html = snap.html;
@@ -2828,8 +2928,12 @@ function renderHistory() {
       historyPanel.classList.add("hidden");
       showToast("Version restaurée");
     });
-    li.appendChild(label);
-    li.appendChild(btn);
+    row.appendChild(label);
+    row.appendChild(compareBtn);
+    row.appendChild(pinBtn);
+    row.appendChild(restoreBtn);
+    li.appendChild(row);
+    li.appendChild(diffBox);
     historyListEl.appendChild(li);
   });
 }
