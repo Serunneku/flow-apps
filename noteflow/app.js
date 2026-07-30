@@ -3618,6 +3618,8 @@ formatToolbar.addEventListener("click", (e) => {
     tableDeleteColumn();
   } else if (cmd === "table-delete") {
     tableDelete();
+  } else if (cmd === "table-header-toggle") {
+    toggleTableHeader();
   } else {
     document.execCommand(cmd, false, null);
     // Chrome leaves the caret at the START of the line after wrapping it
@@ -3886,6 +3888,23 @@ voiceNoteBtn.addEventListener("click", async () => {
   }
 });
 
+// A block copied from a spreadsheet (or any tab/comma-separated text with at
+// least 2 consistent columns across 2+ lines) becomes a real table instead
+// of landing as plain, unstructured text.
+function parseTabularText(text) {
+  // Tab is the only delimiter treated as a reliable "this came from a
+  // spreadsheet" signal — copying two lines of ordinary prose that each
+  // happen to contain one comma (very common in French) would otherwise
+  // get hijacked into an unwanted table.
+  if (!text.includes("\t")) return null;
+  const lines = text.replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim() !== "");
+  if (lines.length < 2) return null;
+  const rows = lines.map((l) => l.split("\t").map((cell) => cell.trim()));
+  const colCount = rows[0].length;
+  if (colCount < 2 || !rows.every((r) => r.length === colCount)) return null;
+  return rows;
+}
+
 textEditor.addEventListener("paste", (e) => {
   const items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
@@ -3896,6 +3915,31 @@ textEditor.addEventListener("paste", (e) => {
       return;
     }
   }
+  const text = e.clipboardData.getData("text/plain");
+  if (!text) return;
+  const rows = parseTabularText(text);
+  if (!rows) return;
+  e.preventDefault();
+  const table = document.createElement("table");
+  table.className = "note-table";
+  rows.forEach((cells, r) => {
+    const tr = document.createElement("tr");
+    cells.forEach((value) => {
+      const cell = document.createElement(r === 0 ? "th" : "td");
+      cell.contentEditable = "true";
+      cell.textContent = value;
+      tr.appendChild(cell);
+    });
+    table.appendChild(tr);
+  });
+  restoreSelection();
+  const sel = window.getSelection();
+  const range = sel.rangeCount ? sel.getRangeAt(0) : document.createRange();
+  if (!sel.rangeCount) range.selectNodeContents(textEditor);
+  range.collapse(false);
+  range.insertNode(table);
+  scheduleSave();
+  showToast("Tableau créé depuis le presse-papiers");
 });
 
 // --- OCR (photo -> texte), chargé à la demande depuis un CDN pour ne pas
@@ -4372,8 +4416,61 @@ function tableAddRow() {
 function tableAddColumn() {
   const table = currentTable();
   if (!table) return;
-  Array.from(table.rows).forEach((row) => row.appendChild(makeCell()));
+  Array.from(table.rows).forEach((row, i) => {
+    const isHeaderRow = i === 0 && row.cells[0] && row.cells[0].tagName === "TH";
+    if (isHeaderRow) {
+      const th = document.createElement("th");
+      th.contentEditable = "true";
+      th.innerHTML = "<br>";
+      row.appendChild(th);
+    } else {
+      row.appendChild(makeCell());
+    }
+  });
 }
+
+// Converts the first row between <td> (plain cells) and <th> (a real header
+// row: distinct style, and clicking a header sorts the table by that
+// column) — content of each cell is preserved either way.
+function toggleTableHeader() {
+  const table = currentTable();
+  if (!table || !table.rows.length) return;
+  const firstRow = table.rows[0];
+  const isHeader = firstRow.cells[0] && firstRow.cells[0].tagName === "TH";
+  Array.from(firstRow.cells).forEach((cell) => {
+    const replacement = document.createElement(isHeader ? "td" : "th");
+    replacement.contentEditable = "true";
+    replacement.innerHTML = cell.innerHTML;
+    cell.replaceWith(replacement);
+  });
+  scheduleSave();
+  showToast(isHeader ? "Ligne d'en-tête retirée" : "Ligne d'en-tête ajoutée (clique dessus pour trier)");
+}
+
+const tableSortState = new WeakMap(); // table -> { colIndex, dir }
+
+textEditor.addEventListener("click", (e) => {
+  const th = e.target.closest("table.note-table th");
+  if (!th) return;
+  const table = th.closest("table");
+  const row = th.parentElement;
+  const colIndex = Array.from(row.cells).indexOf(th);
+  if (colIndex === -1) return;
+  const state = tableSortState.get(table) || {};
+  const dir = state.colIndex === colIndex && state.dir === "asc" ? "desc" : "asc";
+  tableSortState.set(table, { colIndex, dir });
+  const bodyRows = Array.from(table.rows).slice(1);
+  bodyRows.sort((a, b) => {
+    const av = (a.cells[colIndex] && a.cells[colIndex].textContent.trim()) || "";
+    const bv = (b.cells[colIndex] && b.cells[colIndex].textContent.trim()) || "";
+    const an = parseFloat(av.replace(",", "."));
+    const bn = parseFloat(bv.replace(",", "."));
+    const cmp = !Number.isNaN(an) && !Number.isNaN(bn) ? an - bn : av.localeCompare(bv, "fr");
+    return dir === "asc" ? cmp : -cmp;
+  });
+  bodyRows.forEach((row) => table.appendChild(row));
+  scheduleSave();
+});
 
 function tableDelete() {
   const table = currentTable();
@@ -4397,7 +4494,7 @@ function currentCell() {
   for (const source of sources) {
     let node = source;
     if (node && node.nodeType === 3) node = node.parentElement;
-    const cell = node && node.closest ? node.closest("td") : null;
+    const cell = node && node.closest ? node.closest("td, th") : null;
     if (cell) return cell;
   }
   return null;

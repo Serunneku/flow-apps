@@ -1845,7 +1845,8 @@ select option {
   overflow: hidden;
 }
 
-.text-editor table.note-table td {
+.text-editor table.note-table td,
+.text-editor table.note-table th {
   border: 1px solid var(--border);
   padding: 8px 10px;
   min-width: 60px;
@@ -1858,7 +1859,19 @@ select option {
   font-weight: 600;
 }
 
-.text-editor table.note-table td:focus {
+.text-editor table.note-table th {
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.text-editor table.note-table th:hover {
+  background: color-mix(in srgb, var(--gold) 26%, transparent);
+}
+
+.text-editor table.note-table td:focus,
+.text-editor table.note-table th:focus {
   outline: none;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
