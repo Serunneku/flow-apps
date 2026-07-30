@@ -1401,6 +1401,58 @@ button {
   margin-bottom: 12px;
 }
 
+.properties-row {
+  margin-bottom: 12px;
+}
+
+.properties-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.property-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gold) 14%, transparent);
+  color: var(--gold-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.property-chip button {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0.7;
+  padding: 0;
+}
+
+.property-chip button:hover {
+  opacity: 1;
+}
+
+.properties-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px dashed var(--border);
+  background: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  padding: 4px 2px;
+}
+
+.properties-input:focus {
+  outline: none;
+  border-bottom-color: var(--gold);
+}
+
 .word-count {
   font-size: 12px;
   color: var(--muted);

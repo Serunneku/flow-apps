@@ -1249,7 +1249,7 @@ function parseSearchQuery(raw) {
         negate = true;
         text = text.slice(1);
       }
-      const opMatch = /^(tag|dossier|folder|avant|apres|après|est):(.+)$/i.exec(text);
+      const opMatch = /^(tag|dossier|folder|avant|apres|après|est|prop):(.+)$/i.exec(text);
       if (opMatch) {
         let op = opMatch[1].toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
         op = SEARCH_OP_ALIASES[op] || op;
@@ -1278,6 +1278,15 @@ function clauseMatches(note, clause) {
     if (v.startsWith("archiv")) return !!note.archived;
     if (v.startsWith("epingl")) return !!note.pinned;
     return false;
+  }
+  if (clause.op === "prop") {
+    const sep = clause.value.indexOf(":");
+    const propKey = (sep === -1 ? clause.value : clause.value.slice(0, sep)).trim();
+    const propValue = sep === -1 ? null : clause.value.slice(sep + 1).trim();
+    const props = note.properties || {};
+    const actualKey = Object.keys(props).find((k) => k.toLowerCase() === propKey);
+    if (!actualKey) return false;
+    return propValue === null || props[actualKey].toLowerCase() === propValue;
   }
   return noteHaystack(note).includes(clause.text);
 }
@@ -1656,6 +1665,7 @@ function newNoteObject() {
     bioCredentialId: null,
     bioSalt: null,
     bioWrappedKey: null,
+    properties: {},
     reminderAt: null,
     reminderRecur: null,
     expiresAt: null,
@@ -1735,6 +1745,8 @@ function loadNoteIntoEditor() {
   titleInput.value = currentNote.title || "";
   folderInput.value = currentNote.folder || "";
   tagsInput.value = (currentNote.tags || []).join(", ");
+  if (!currentNote.properties) currentNote.properties = {};
+  renderProperties();
   // Defense in depth: also sanitize right before render, in case a note
   // already sitting in IndexedDB predates the ingestion-point sanitization
   // (import / .noteflow / Firestore sync) added alongside this line.
@@ -2352,6 +2364,56 @@ setInterval(() => {
 titleInput.addEventListener("input", scheduleSave);
 folderInput.addEventListener("change", scheduleSave);
 tagsInput.addEventListener("change", scheduleSave);
+
+// --- Structured properties: key/value pairs stored on the note object
+// itself (note.properties), not in the HTML body — so they stay comparable
+// and filterable (prop:clé:valeur in search) instead of being just more
+// unstructured text in the note. ---
+const propertiesChipsEl = document.getElementById("properties-chips");
+const propertiesInput = document.getElementById("properties-input");
+
+function renderProperties() {
+  propertiesChipsEl.innerHTML = "";
+  const props = currentNote.properties || {};
+  Object.keys(props).forEach((key) => {
+    const chip = document.createElement("span");
+    chip.className = "property-chip";
+    const label = document.createElement("span");
+    label.textContent = `${key}: ${props[key]}`;
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.textContent = "✕";
+    removeBtn.setAttribute("aria-label", `Retirer la propriété ${key}`);
+    removeBtn.addEventListener("click", () => {
+      delete currentNote.properties[key];
+      renderProperties();
+      scheduleSave();
+    });
+    chip.appendChild(label);
+    chip.appendChild(removeBtn);
+    propertiesChipsEl.appendChild(chip);
+  });
+}
+
+propertiesInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const raw = propertiesInput.value.trim();
+  if (!raw) return;
+  const sep = raw.indexOf(":");
+  if (sep === -1) {
+    showToast("Format attendu : clé: valeur");
+    return;
+  }
+  const key = raw.slice(0, sep).trim();
+  const value = raw.slice(sep + 1).trim();
+  if (!key || !value) return;
+  if (!currentNote.properties) currentNote.properties = {};
+  currentNote.properties[key] = value;
+  propertiesInput.value = "";
+  renderProperties();
+  scheduleSave();
+});
 textEditor.addEventListener("input", () => {
   scheduleSave();
   updateWordCount();
