@@ -1029,6 +1029,140 @@ async function renameTagEverywhere(oldTag, newTag) {
   showToast(newTag ? `#${oldTag} renommé en #${newTag}` : `#${oldTag} supprimé de ${affected.length} note(s)`);
 }
 
+// --- Notebook hygiene dashboard: a diagnostic pass over the whole notebook
+// (broken links, duplicate titles, tags used once, notes gone stale, orphaned
+// folder covers), each finding with a one-click fix — not a graph view, just
+// an actionable anomaly list. ---
+const hygieneBtn = document.getElementById("hygiene-btn");
+const hygienePanel = document.getElementById("hygiene-panel");
+const hygieneListEl = document.getElementById("hygiene-list");
+const SIX_MONTHS_MS = 183 * 24 * 60 * 60 * 1000;
+
+function addHygieneSection(title, entries, emptyText) {
+  const header = document.createElement("li");
+  header.className = "backlinks-section-header";
+  header.textContent = title;
+  hygieneListEl.appendChild(header);
+  if (!entries.length) {
+    const li = document.createElement("li");
+    li.className = "history-empty";
+    li.textContent = emptyText;
+    hygieneListEl.appendChild(li);
+    return;
+  }
+  entries.forEach(({ label, actionLabel, action }) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const span = document.createElement("span");
+    span.textContent = label;
+    li.appendChild(span);
+    if (action) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = actionLabel || "Ouvrir";
+      btn.addEventListener("click", action);
+      li.appendChild(btn);
+    }
+    hygieneListEl.appendChild(li);
+  });
+}
+
+function renderHygieneDashboard() {
+  hygieneListEl.innerHTML = "";
+  const active = notes.filter((n) => !n.deletedAt);
+
+  const brokenLinks = [];
+  active.forEach((note) => {
+    const container = document.createElement("div");
+    container.innerHTML = note.html || "";
+    container.querySelectorAll("[data-note-id]").forEach((el) => {
+      const targetId = el.dataset.noteId;
+      if (!notes.some((n) => n.id === targetId && !n.deletedAt)) {
+        brokenLinks.push({
+          label: `« ${note.title || "Sans titre"} » contient un lien brisé`,
+          actionLabel: "Ouvrir",
+          action: () => {
+            hygienePanel.classList.add("hidden");
+            goToNote(note.id);
+          },
+        });
+      }
+    });
+  });
+
+  const titleGroups = new Map();
+  active.forEach((n) => {
+    const key = (n.title || "").trim().toLowerCase();
+    if (!key) return;
+    if (!titleGroups.has(key)) titleGroups.set(key, []);
+    titleGroups.get(key).push(n);
+  });
+  const duplicates = [...titleGroups.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => ({
+      label: `${group.length} notes intitulées « ${group[0].title} »`,
+      actionLabel: "Voir la 1ère",
+      action: () => {
+        hygienePanel.classList.add("hidden");
+        goToNote(group[0].id);
+      },
+    }));
+
+  const tagCounts = new Map();
+  active.forEach((n) => (n.tags || []).forEach((t) => tagCounts.set(t, (tagCounts.get(t) || 0) + 1)));
+  const rareTags = [...tagCounts.entries()]
+    .filter(([, count]) => count === 1)
+    .map(([tag]) => ({
+      label: `#${tag} n'est utilisé que sur une seule note`,
+      actionLabel: "Gérer les tags",
+      action: () => {
+        hygienePanel.classList.add("hidden");
+        tagManagerBtn.click();
+      },
+    }));
+
+  const stale = active
+    .filter((n) => {
+      const lastTouch = Math.max(n.lastOpenedAt || 0, n.updatedAt || 0);
+      return Date.now() - lastTouch > SIX_MONTHS_MS;
+    })
+    .map((n) => ({
+      label: `« ${n.title || "Sans titre"} » n'a pas été rouverte depuis plus de 6 mois`,
+      actionLabel: "Ouvrir",
+      action: () => {
+        hygienePanel.classList.add("hidden");
+        goToNote(n.id);
+      },
+    }));
+
+  const usedFolders = new Set(active.map((n) => n.folder).filter(Boolean));
+  const covers = loadFolderCovers();
+  const orphanCovers = Object.keys(covers)
+    .filter((folder) => !usedFolders.has(folder))
+    .map((folder) => ({
+      label: `Couverture enregistrée pour le dossier « ${folder} », qui n'a plus de note`,
+      actionLabel: "Nettoyer",
+      action: () => {
+        const current = loadFolderCovers();
+        delete current[folder];
+        saveFolderCovers(current);
+        renderHygieneDashboard();
+      },
+    }));
+
+  addHygieneSection("Liens brisés", brokenLinks, "Aucun lien brisé détecté.");
+  addHygieneSection("Titres en doublon", duplicates, "Aucun doublon de titre.");
+  addHygieneSection("Tags peu utilisés", rareTags, "Chaque tag est utilisé sur plusieurs notes.");
+  addHygieneSection("Notes oubliées (6+ mois)", stale, "Aucune note oubliée.");
+  addHygieneSection("Couvertures de dossier orphelines", orphanCovers, "Rien à nettoyer.");
+}
+
+hygieneBtn.addEventListener("click", () => {
+  const opening = hygienePanel.classList.contains("hidden");
+  hygienePanel.classList.toggle("hidden");
+  if (opening) renderHygieneDashboard();
+});
+
 let draggedNoteId = null;
 
 function reorderNotes(targetId) {
@@ -1740,6 +1874,7 @@ function newNoteObject() {
     bioWrappedKey: null,
     properties: {},
     journalDate: null,
+    lastOpenedAt: null,
     reminderAt: null,
     reminderRecur: null,
     expiresAt: null,
@@ -1802,6 +1937,8 @@ async function openNote(id) {
   currentNote = notes.find((n) => n.id === id);
   if (!currentNote) return;
   recordRecentNote(id);
+  currentNote.lastOpenedAt = Date.now();
+  persistNote(currentNote);
   if (currentNote.locked) {
     showLockOverlay();
     return;
