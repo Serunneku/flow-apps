@@ -1675,9 +1675,21 @@ function updateWordCount(instant) {
   wordCountAnimFrame = requestAnimationFrame(step);
 }
 
+// Recently-opened note ids, most recent first — feeds the ⌘K palette's
+// default list (before any query is typed) so it doubles as a quick-switcher
+// between the handful of notes actually in use right now, not just an
+// alphabetical/chronological browse of the whole notebook.
+const RECENT_NOTES_KEY = "noteflow.recentNoteIds";
+function recordRecentNote(id) {
+  const list = loadPref(RECENT_NOTES_KEY, []).filter((n) => n !== id);
+  list.unshift(id);
+  savePref(RECENT_NOTES_KEY, list.slice(0, 10));
+}
+
 async function openNote(id) {
   currentNote = notes.find((n) => n.id === id);
   if (!currentNote) return;
+  recordRecentNote(id);
   if (currentNote.locked) {
     showLockOverlay();
     return;
@@ -4571,6 +4583,7 @@ async function goToNote(id) {
 }
 
 function cmdkActionItems(query) {
+  const inEditor = editorScreen.classList.contains("active") && currentNote;
   const items = [
     { label: "Nouvelle note", sub: "Créer une note vide", action: () => newNoteBtn.click() },
     { label: "Basculer le thème", sub: "Auto / clair / sombre", action: () => themeToggle.click() },
@@ -4578,24 +4591,89 @@ function cmdkActionItems(query) {
     { label: "Voir la corbeille", sub: "", action: () => { showList(); setListView("trash"); } },
     { label: "Sélection multiple", sub: "Archiver / déplacer / supprimer plusieurs notes", action: () => { showList(); setSelectionMode(true); } },
   ];
+  // These only make sense with a note actually open — listed here instead of
+  // buried in the editor's own "..." menu, since ⌘K is meant to be the one
+  // place that reaches every action without hunting through menus.
+  if (inEditor) {
+    items.push(
+      { label: currentNote.locked ? "Retirer le verrou" : "Verrouiller la note", sub: "", action: () => lockBtn.click() },
+      { label: "Dupliquer la note", sub: "", action: () => duplicateNoteBtn.click() },
+      { label: "Scinder par titres (H2)", sub: "", action: () => document.getElementById("split-note-btn").click() },
+      { label: "Extraire les tâches", sub: "", action: () => document.getElementById("extract-tasks-btn").click() },
+      { label: "Exporter cette note", sub: "JSON", action: () => document.getElementById("export-note-btn").click() },
+      { label: "Mode dessin & surlignage", sub: "", action: () => modeDrawBtn.click() },
+      { label: "Mode focus", sub: "", action: () => focusBtn.click() },
+      { label: "Rechercher / remplacer", sub: "Dans cette note", action: () => document.getElementById("find-btn").click() },
+      { label: "Archiver la note", sub: "", action: () => archiveBtn.click() },
+      { label: "Supprimer la note", sub: "", action: () => deleteNoteBtn.click() }
+    );
+  }
   if (!query) return items;
   const q = query.toLowerCase();
   return items.filter((it) => it.label.toLowerCase().includes(q));
 }
 
-function renderCmdkResults(query) {
+function renderCmdkResults(rawQuery) {
+  // Prefixes narrow the palette to one kind of result, Slack/Spotlight-style:
+  // ">" actions only, "#" tags, "/" folders — otherwise it's the default mix
+  // of actions + matching notes (now searched by content too, not just
+  // title/folder).
+  const mode = rawQuery[0] === ">" || rawQuery[0] === "#" || rawQuery[0] === "/" ? rawQuery[0] : null;
+  const query = mode ? rawQuery.slice(1) : rawQuery;
   const q = query.trim().toLowerCase();
-  const noteItems = notes
-    .filter((n) => !n.deletedAt)
-    .filter((n) => !q || (n.title || "sans titre").toLowerCase().includes(q) || (n.folder || "").toLowerCase().includes(q))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 8)
-    .map((n) => ({
+
+  if (mode === "#") {
+    const tagItems = allTags()
+      .filter((t) => !q || t.toLowerCase().includes(q))
+      .map((t) => ({
+        label: "#" + t,
+        sub: `${notes.filter((n) => !n.deletedAt && (n.tags || []).includes(t)).length} note(s)`,
+        action: () => {
+          showList();
+          activeTagFilter = t;
+          renderList();
+        },
+      }));
+    cmdkItems = tagItems;
+  } else if (mode === "/") {
+    const folderItems = allFolders()
+      .filter((f) => !q || f.toLowerCase().includes(q))
+      .map((f) => ({
+        label: f,
+        sub: `${notes.filter((n) => !n.deletedAt && (n.folder === f || (n.folder || "").startsWith(f + "/"))).length} note(s)`,
+        action: () => {
+          showList();
+          activeFolderFilter = f;
+          renderList();
+        },
+      }));
+    cmdkItems = folderItems;
+  } else if (mode === ">") {
+    cmdkItems = cmdkActionItems(q);
+  } else {
+    let candidateNotes = notes.filter((n) => !n.deletedAt);
+    if (!q) {
+      const recentIds = loadPref(RECENT_NOTES_KEY, []);
+      const recentSet = new Set(recentIds);
+      candidateNotes = recentIds.map((id) => notes.find((n) => n.id === id && !n.deletedAt)).filter(Boolean);
+      if (!candidateNotes.length) candidateNotes = notes.filter((n) => !n.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
+    } else {
+      candidateNotes = candidateNotes
+        .filter((n) => {
+          const haystack = (n.title || "sans titre") + " " + (n.folder || "") + " " + (n.tags || []).join(" ") + " " + (n.locked ? "" : getPreview(n));
+          return haystack.toLowerCase().includes(q);
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 8);
+    }
+    const noteItems = candidateNotes.map((n) => ({
       label: n.locked ? "🔒 " + (n.title || "Sans titre") : n.title || "Sans titre",
       sub: n.folder || "Note",
       action: () => goToNote(n.id),
     }));
-  cmdkItems = [...cmdkActionItems(query), ...noteItems];
+    cmdkItems = [...cmdkActionItems(q), ...noteItems];
+  }
+
   cmdkActiveIndex = 0;
   cmdkList.innerHTML = "";
   if (!cmdkItems.length) {
