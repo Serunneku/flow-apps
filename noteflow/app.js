@@ -90,6 +90,7 @@ let activeTagFilter = null;
 let listView = "active"; // "active" | "archived" | "trash"
 let selectionMode = false;
 let selectedIds = new Set();
+let lastRenderedNoteIds = new Set();
 
 // --- Vaults: fully separate note collections within the same install (e.g.
 // "Pro" / "Perso"). All notes stay in one array/one IndexedDB store — a
@@ -356,7 +357,13 @@ const contrastToggleBtn = document.getElementById("contrast-toggle-btn");
 const contrastToggleLabel = document.createTextNode("");
 contrastToggleBtn.innerHTML = '<svg class="icon"><use href="#icon-contrast"/></svg>';
 contrastToggleBtn.appendChild(contrastToggleLabel);
-let thickInkEnabled = loadPref(PREF_KEYS.thickInk, false);
+// If the user never touched the in-app toggle, honor the OS-level
+// "prefers-contrast: more" signal instead of defaulting to off — the two
+// settings previously never talked to each other, so this mode was only
+// reachable by knowing it existed and digging for it in the menu.
+const thickInkNeverSet = localStorage.getItem(PREF_KEYS.thickInk) === null;
+const prefersMoreContrast = window.matchMedia && window.matchMedia("(prefers-contrast: more)").matches;
+let thickInkEnabled = loadPref(PREF_KEYS.thickInk, thickInkNeverSet && prefersMoreContrast);
 function applyThickInk() {
   if (thickInkEnabled) document.documentElement.setAttribute("data-thick-ink", "true");
   else document.documentElement.removeAttribute("data-thick-ink");
@@ -1758,10 +1765,19 @@ function finishRenderList(visible, query, highlightTerm, preserveOrder) {
     else notesEmptyEl.textContent = "Aucune note pour l'instant. Touche « + » pour commencer.";
   }
 
+  // renderList() reruns on every reorder, tag toggle or rename, not just on
+  // an actual view change — without this, dragging one note to a new spot
+  // replayed the cascade entrance animation for the entire list. Only notes
+  // that weren't part of the previous render (a genuinely new appearance —
+  // first load, a filter revealing them, a search match) get it now.
+  const previouslyRendered = lastRenderedNoteIds;
+  const renderedThisPass = new Set();
   visible.forEach((note, index) => {
+    renderedThisPass.add(note.id);
     const li = document.createElement("li");
-    li.className = "note-item note-in";
-    li.style.animationDelay = `${Math.min(index, 12) * 28}ms`;
+    const isNewToView = !previouslyRendered.has(note.id);
+    li.className = isNewToView ? "note-item note-in" : "note-item";
+    if (isNewToView) li.style.animationDelay = `${Math.min(index, 12) * 28}ms`;
     const preview = note.locked
       ? "Note verrouillée"
       : getPreview(note) || (note.drawing && note.drawing.strokes.length ? "Dessin" : "Note vide");
@@ -1909,6 +1925,7 @@ function finishRenderList(visible, query, highlightTerm, preserveOrder) {
     });
     notesListEl.appendChild(li);
   });
+  lastRenderedNoteIds = renderedThisPass;
 }
 
 let searchDebounceTimer = null;
@@ -1968,8 +1985,19 @@ function renderSavedSearchChips() {
     remove.textContent = "×";
     remove.addEventListener("click", (e) => {
       e.stopPropagation();
-      persistSavedSearches(loadSavedSearches().filter((x) => x.id !== s.id));
-      renderSavedSearchChips();
+      const commit = () => {
+        persistSavedSearches(loadSavedSearches().filter((x) => x.id !== s.id));
+        renderSavedSearchChips();
+      };
+      // The chip used to just vanish mid-list-rebuild — a quick shrink first
+      // gives the removal a visible cause, same spirit as the note-item
+      // crumple-out animation used elsewhere for delete actions.
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        commit();
+        return;
+      }
+      chip.classList.add("chip-out");
+      chip.addEventListener("animationend", commit, { once: true });
     });
     chip.appendChild(label);
     chip.appendChild(remove);
@@ -4307,6 +4335,7 @@ function buildGraphData() {
     return {
       id: n.id,
       title: n.title || "Sans titre",
+      folder: n.folder || "",
       x: cx + Math.cos(angle) * radius,
       y: cy + Math.sin(angle) * radius,
       vx: 0,
@@ -4315,6 +4344,37 @@ function buildGraphData() {
     };
   });
   return { nodes, edges };
+}
+
+// Reused as-is (not folderDisplayColor, which can return a CSS gradient
+// string for custom cover swatches — not usable as a canvas fillStyle).
+function graphNodeColor(node) {
+  return node.folder ? folderColor(node.folder) : goldColorFallback();
+}
+let cachedGoldColor = null;
+function goldColorFallback() {
+  if (!cachedGoldColor) {
+    cachedGoldColor = getComputedStyle(document.documentElement).getPropertyValue("--gold").trim() || "#c8963c";
+  }
+  return cachedGoldColor;
+}
+
+function renderGraphLegend(nodes) {
+  cachedGoldColor = null; // theme may have changed since the last render
+  const legendEl = document.getElementById("graph-view-legend");
+  const folders = [...new Set(nodes.map((n) => n.folder).filter(Boolean))].sort();
+  legendEl.innerHTML = "";
+  if (nodes.some((n) => !n.folder)) folders.push("");
+  folders.forEach((folder) => {
+    const item = document.createElement("span");
+    item.className = "graph-view-legend-item";
+    const dot = document.createElement("span");
+    dot.className = "graph-view-legend-dot";
+    dot.style.background = folder ? folderColor(folder) : goldColorFallback();
+    item.appendChild(dot);
+    item.appendChild(document.createTextNode(folder || "Sans dossier"));
+    legendEl.appendChild(item);
+  });
 }
 
 function graphStep() {
@@ -4379,7 +4439,6 @@ function drawGraph() {
   const byId = new Map(graphNodes.map((n) => [n.id, n]));
   const rootStyle = getComputedStyle(document.documentElement);
   const borderColor = rootStyle.getPropertyValue("--border").trim() || "rgba(0,0,0,0.1)";
-  const goldColor = rootStyle.getPropertyValue("--gold").trim() || "#c8963c";
   const textColor = rootStyle.getPropertyValue("--text").trim() || "#111";
 
   graphCtx.strokeStyle = borderColor;
@@ -4398,7 +4457,7 @@ function drawGraph() {
     const r = 5 + Math.min(n.degree, 8) * 1.5;
     graphCtx.beginPath();
     graphCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
-    graphCtx.fillStyle = goldColor;
+    graphCtx.fillStyle = graphNodeColor(n);
     graphCtx.globalAlpha = n === graphHoverNode ? 1 : 0.7;
     graphCtx.fill();
     graphCtx.globalAlpha = 1;
@@ -4499,6 +4558,7 @@ function openGraphView() {
     graphNodes = data.nodes;
     graphEdges = data.edges;
     graphViewCount.textContent = `${graphNodes.length} note${graphNodes.length > 1 ? "s" : ""} · ${graphEdges.length} lien${graphEdges.length > 1 ? "s" : ""}`;
+    renderGraphLegend(graphNodes);
     if (graphAnimFrame) cancelAnimationFrame(graphAnimFrame);
     graphLoop();
   });
