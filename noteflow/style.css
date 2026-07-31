@@ -1254,6 +1254,29 @@ button {
   background: var(--gold);
 }
 
+/* Non-interactive cluster header preceding a family's tag chips in the same
+   flex-wrap row — a label, not a filter, so it's a span, not a button. */
+.tag-family-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 4px 2px 4px 4px;
+  flex-basis: 100%;
+}
+
+.tag-family-label:first-child {
+  padding-top: 0;
+}
+
+.tag-family-input {
+  width: 140px;
+  flex-shrink: 0;
+}
+
 .saved-search-chip {
   display: inline-flex;
   align-items: center;
@@ -2666,17 +2689,24 @@ a:focus-visible,
 }
 
 .kanban-column {
+  position: relative;
   flex: 1 0 240px;
   max-width: 320px;
   min-width: 220px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  background: color-mix(in srgb, var(--gold) 7%, var(--surface));
+  gap: 12px;
+  /* Cork-board wash: same fractal-noise trick as the paper grain, tinted
+     toward the gold/tan of the brand instead of a flat surface color — a
+     column should read as a board you pin things to, not a generic list. */
+  background:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.08'/></svg>"),
+    color-mix(in srgb, var(--gold) 16%, var(--surface));
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: 14px 12px;
   min-height: 120px;
+  box-shadow: var(--shadow-sm);
   transition: box-shadow 0.15s var(--ease), border-color 0.15s var(--ease);
 }
 
@@ -2701,17 +2731,20 @@ a:focus-visible,
 }
 
 .kanban-card {
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border-radius: 3px 3px 10px 10px;
+  padding: 16px 12px 10px;
   box-shadow: var(--shadow-sm);
   cursor: grab;
+  transform: rotate(var(--card-tilt, 0deg));
   transition: box-shadow 0.15s var(--ease), transform 0.15s var(--ease), opacity 0.15s var(--ease);
 }
 
 .kanban-card:hover {
   box-shadow: var(--shadow-hover);
+  transform: rotate(0deg) translateY(-1px);
 }
 
 .kanban-card:active {
@@ -2720,16 +2753,18 @@ a:focus-visible,
 
 .kanban-card.dragging {
   opacity: 0.4;
-  transform: rotate(-2deg) scale(0.98);
+  transform: rotate(-4deg) scale(0.96);
 }
 
 .kanban-card-pin {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
   border-radius: 50%;
-  margin-right: 6px;
-  vertical-align: middle;
+  box-shadow: var(--shadow-sm), inset -1px -1px 2px rgba(0, 0, 0, 0.3), inset 1px 1px 1px rgba(255, 255, 255, 0.45);
 }
 
 .kanban-card-title {

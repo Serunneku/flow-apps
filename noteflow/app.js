@@ -71,6 +71,7 @@ const PREF_KEYS = {
   thickInk: "noteflow.thickInk",
   folderCovers: "noteflow.folderCovers",
   snippets: "noteflow.snippets",
+  tagFamilies: "noteflow.tagFamilies",
 };
 const loadPref = (key, fallback) => {
   try {
@@ -947,6 +948,24 @@ function allTags() {
   return [...new Set(notesInActiveVault().flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
 }
 
+// --- Tag families: an optional, purely cosmetic grouping layer over flat
+// tags (e.g. #urgent and #important both filed under "Priorité") — tags
+// stay flat in the data model (still one array on the note, still fully
+// compatible with tag: search clauses), this is only how they're clustered
+// in the sidebar and the tag manager. ---
+let tagFamiliesCache = null;
+function loadTagFamilies() {
+  if (!tagFamiliesCache) tagFamiliesCache = loadPref(PREF_KEYS.tagFamilies, {});
+  return tagFamiliesCache;
+}
+function saveTagFamilies(map) {
+  tagFamiliesCache = map;
+  savePref(PREF_KEYS.tagFamilies, map);
+}
+function tagFamily(tag) {
+  return loadTagFamilies()[tag] || "";
+}
+
 // --- Global tag manager: rename (or merge, by renaming to an existing tag)
 // across every note at once, instead of a tag being stuck forever once typed. ---
 const tagManagerBtn = document.getElementById("manage-tags-btn");
@@ -972,6 +991,20 @@ function renderTagManager() {
     li.className = "history-item";
     const label = document.createElement("span");
     label.textContent = `#${tag} (${count})`;
+    const familyInput = document.createElement("input");
+    familyInput.type = "text";
+    familyInput.className = "properties-input tag-family-input";
+    familyInput.placeholder = "Famille (optionnel)";
+    familyInput.value = tagFamily(tag);
+    familyInput.setAttribute("aria-label", `Famille du tag ${tag}`);
+    familyInput.addEventListener("change", () => {
+      const families = loadTagFamilies();
+      const next = familyInput.value.trim();
+      if (next) families[tag] = next;
+      else delete families[tag];
+      saveTagFamilies(families);
+      renderFolderFilters();
+    });
     const actions = document.createElement("div");
     actions.style.display = "flex";
     actions.style.gap = "6px";
@@ -995,6 +1028,7 @@ function renderTagManager() {
     actions.appendChild(renameBtn);
     actions.appendChild(deleteBtn);
     li.appendChild(label);
+    li.appendChild(familyInput);
     li.appendChild(actions);
     tagManagerListEl.appendChild(li);
   });
@@ -1075,6 +1109,12 @@ async function renameTagEverywhere(oldTag, newTag) {
     const set = new Set(note.tags.map((t) => (t === oldTag ? newTag : t)).filter(Boolean));
     note.tags = [...set];
     await persistNote(note);
+  }
+  const families = loadTagFamilies();
+  if (oldTag in families) {
+    if (newTag) families[newTag] = families[oldTag];
+    delete families[oldTag];
+    saveTagFamilies(families);
   }
   renderList();
   showToast(newTag ? `#${oldTag} renommé en #${newTag}` : `#${oldTag} supprimé de ${affected.length} note(s)`);
@@ -1327,7 +1367,7 @@ function renderFolderFilters() {
     });
     folderFiltersEl.appendChild(chip);
   });
-  tags.forEach((tag) => {
+  function appendTagChip(tag) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "tag-filter-chip tag-chip" + (activeTagFilter === tag ? " active" : "");
@@ -1337,7 +1377,26 @@ function renderFolderFilters() {
       renderList();
     });
     folderFiltersEl.appendChild(chip);
+  }
+  // Families are a purely visual cluster (see loadTagFamilies) — tags with
+  // no family assigned just render as the flat row this always was.
+  const families = loadTagFamilies();
+  const byFamily = new Map();
+  const ungroupedTags = [];
+  tags.forEach((tag) => {
+    const fam = families[tag];
+    if (!fam) { ungroupedTags.push(tag); return; }
+    if (!byFamily.has(fam)) byFamily.set(fam, []);
+    byFamily.get(fam).push(tag);
   });
+  [...byFamily.keys()].sort((a, b) => a.localeCompare(b, "fr")).forEach((fam) => {
+    const famLabel = document.createElement("span");
+    famLabel.className = "tag-family-label";
+    famLabel.textContent = fam;
+    folderFiltersEl.appendChild(famLabel);
+    byFamily.get(fam).forEach(appendTagChip);
+  });
+  ungroupedTags.forEach(appendTagChip);
 }
 
 function escapeHtml(str) {
@@ -2792,6 +2851,74 @@ function exportNoteAsMarkdown(note) {
   ].filter((l) => l !== null);
   return front.join("\n") + htmlToMarkdown(note.html);
 }
+
+// --- Structured Markdown export: one real .md file per note, mirroring the
+// folder hierarchy as actual filesystem folders — unlike the single-note
+// export above or the local JSON backup (one opaque combined file), this is
+// meant to be opened directly by Obsidian, a plain text editor, or anything
+// else that reads a folder of Markdown. One-way (export only, no import-back
+// sync loop) since round-tripping edits made outside NoteFlow back in raises
+// conflict questions the JSON sync mechanism already exists to answer. ---
+async function getOrCreateFolderHandle(rootHandle, folderPath) {
+  if (!folderPath) return rootHandle;
+  let handle = rootHandle;
+  for (const segment of folderPath.split("/")) {
+    const name = safeFilename(segment).trim() || "Sans nom";
+    handle = await handle.getDirectoryHandle(name, { create: true });
+  }
+  return handle;
+}
+
+document.getElementById("export-markdown-folder-btn").addEventListener("click", async () => {
+  if (!window.showDirectoryPicker) {
+    showToast("Non disponible sur ce navigateur (Chrome/Edge sur ordinateur uniquement)");
+    return;
+  }
+  let rootHandle;
+  try {
+    rootHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+  } catch {
+    return; // user cancelled the picker
+  }
+  const candidates = notesInActiveVault().filter((n) => !n.deletedAt);
+  let exported = 0;
+  let skippedLocked = 0;
+  // Keyed by folder path string, not by directory handle — getDirectoryHandle
+  // hands back a fresh handle object each call, so two notes in the same
+  // folder would otherwise never see each other's used filenames.
+  const usedNamesByDir = new Map();
+  for (const note of candidates) {
+    if (note.locked) {
+      skippedLocked++;
+      continue;
+    }
+    try {
+      const dirHandle = await getOrCreateFolderHandle(rootHandle, note.folder);
+      const dirKey = note.folder || "";
+      if (!usedNamesByDir.has(dirKey)) usedNamesByDir.set(dirKey, new Set());
+      const usedNames = usedNamesByDir.get(dirKey);
+      let baseName = safeFilename(note.title || "Sans titre").trim() || "Sans titre";
+      let filename = `${baseName}.md`;
+      // Two notes can share a title in the same folder (nothing stops it in
+      // NoteFlow) — a second file of the same name would silently overwrite
+      // the first on disk, so disambiguate instead of losing a note.
+      let suffix = 2;
+      while (usedNames.has(filename)) {
+        filename = `${baseName} (${suffix}).md`;
+        suffix++;
+      }
+      usedNames.add(filename);
+      const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(exportNoteAsMarkdown(note));
+      await writable.close();
+      exported++;
+    } catch {
+      /* one note failing (permission hiccup, odd folder name) shouldn't abort the whole export */
+    }
+  }
+  showToast(`${exported} note${exported > 1 ? "s" : ""} exportée${exported > 1 ? "s" : ""}` + (skippedLocked ? ` (${skippedLocked} verrouillée${skippedLocked > 1 ? "s" : ""} ignorée${skippedLocked > 1 ? "s" : ""})` : ""));
+});
 
 // Notion's bulk export appends a 32-char hex block id to every filename
 // ("Meeting Notes 3f9a1c2b4d5e6f7a8b9c0d1e2f3a4b5c.md") — strip it so the
@@ -5121,18 +5248,28 @@ function kanbanScopedNotes() {
   });
 }
 
+// Deterministic per-card tilt (same note always tilts the same way instead
+// of jittering on every re-render) — small range so a column full of cards
+// reads as "pinned to a board", not seasick.
+function kanbanCardTilt(noteId) {
+  let hash = 0;
+  for (let i = 0; i < noteId.length; i++) hash = noteId.charCodeAt(i) + ((hash << 5) - hash);
+  return `${(Math.abs(hash) % 7) - 3}deg`;
+}
+
 function renderKanbanCard(note) {
   const card = document.createElement("div");
   card.className = "kanban-card";
   card.draggable = true;
   card.dataset.noteId = note.id;
+  card.style.setProperty("--card-tilt", kanbanCardTilt(note.id));
   const pin = document.createElement("span");
   pin.className = "kanban-card-pin";
   pin.style.background = note.folder ? folderColor(note.folder) : "var(--gold)";
+  card.appendChild(pin);
   const title = document.createElement("div");
   title.className = "kanban-card-title";
-  title.appendChild(pin);
-  title.appendChild(document.createTextNode(note.title || "Sans titre"));
+  title.textContent = note.title || "Sans titre";
   card.appendChild(title);
   const preview = getPreview(note);
   if (preview) {
