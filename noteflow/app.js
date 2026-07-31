@@ -454,6 +454,10 @@ function enhanceSelect(select) {
   function updateTrigger() {
     const opt = select.options[select.selectedIndex];
     trigger.textContent = opt ? opt.textContent : "";
+    // Overwrites the generic select.title set above — once a value is
+    // selected, seeing that exact (possibly ellipsis-truncated) text on
+    // hover is more useful than the select's static description.
+    if (opt) trigger.title = opt.textContent;
   }
   function closeList() {
     list.classList.add("hidden");
@@ -1783,8 +1787,12 @@ function finishRenderList(visible, query, highlightTerm, preserveOrder) {
       <div class="note-actions">${actions}</div>
     `;
     if (note.color) li.style.backgroundColor = note.color;
-    li.querySelector(".note-title-text").innerHTML = highlightMatch(note.title || "Sans titre", highlightTerm);
-    li.querySelector(".note-preview").innerHTML = note.locked ? preview : highlightMatch(preview, highlightTerm);
+    const titleEl = li.querySelector(".note-title-text");
+    const previewEl = li.querySelector(".note-preview");
+    titleEl.innerHTML = highlightMatch(note.title || "Sans titre", highlightTerm);
+    titleEl.title = note.title || "Sans titre";
+    previewEl.innerHTML = note.locked ? preview : highlightMatch(preview, highlightTerm);
+    previewEl.title = preview;
     const dateEl = li.querySelector(".note-date");
     dateEl.textContent = timeAgo(note.updatedAt);
     const exactDate = new Date(note.updatedAt).toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" });
@@ -3153,6 +3161,9 @@ async function relockIfUnattended() {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") relockIfUnattended();
+  // The ambient mesh-gradient blobs animate continuously (30-46s loops) —
+  // pointless work, and battery drain, while the tab isn't visible.
+  document.body.classList.toggle("mesh-paused", document.visibilityState === "hidden");
 });
 
 setInterval(() => {
@@ -3573,6 +3584,12 @@ async function attemptUnlock() {
   const pin = lockInput.value;
   let key = null;
   let plainBlob = null;
+  // PBKDF2 at 150k iterations plus AES-GCM decryption is genuinely slow on
+  // low-end phones (can run past a second) — without this, the PIN prompt
+  // just sits there with no sign anything is happening after pressing Enter.
+  lockUnlockBtn.disabled = true;
+  const unlockBtnLabel = lockUnlockBtn.textContent;
+  lockUnlockBtn.textContent = "Déverrouillage…";
   try {
     if (note.pinSalt && note.encBlob) {
       key = await deriveKey(pin, b64ToBytes(note.pinSalt));
@@ -3603,6 +3620,9 @@ async function attemptUnlock() {
     lockInput.value = "";
     lockInput.focus();
     return;
+  } finally {
+    lockUnlockBtn.disabled = false;
+    lockUnlockBtn.textContent = unlockBtnLabel;
   }
   lockFailCount = 0;
   activeUnlockKey = { noteId: note.id, key };
@@ -4082,6 +4102,7 @@ function renderOutline() {
     });
     const label = document.createElement("span");
     label.textContent = heading.textContent.trim() || "(sans titre)";
+    label.title = label.textContent;
     label.addEventListener("click", () => {
       outlinePanel.classList.add("hidden");
       heading.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -4228,6 +4249,19 @@ function extractOutgoingRefs(html) {
   container.querySelectorAll("a.wikilink[data-note-id]").forEach((a) => refs.push({ id: a.dataset.noteId, kind: "link" }));
   container.querySelectorAll(".transclusion[data-note-id]").forEach((d) => refs.push({ id: d.dataset.noteId, kind: "transclusion" }));
   return refs;
+}
+
+// Full-bleed overlays (graph/mindmap/whiteboard/tasks view) all open via a
+// button click and close via an explicit close button — without this, focus
+// is left on the now-hidden trigger (or falls back to <body>) once the
+// overlay is dismissed, stranding keyboard/screen-reader users instead of
+// putting them back where they were.
+let lastOverlayTrigger = null;
+function restoreOverlayFocus() {
+  if (lastOverlayTrigger) {
+    lastOverlayTrigger.focus();
+    lastOverlayTrigger = null;
+  }
 }
 
 // --- Interactive graph view: notes as nodes, wikilinks/transclusions as
@@ -4474,9 +4508,11 @@ function closeGraphView() {
   graphViewOverlay.classList.add("hidden");
   if (graphAnimFrame) cancelAnimationFrame(graphAnimFrame);
   graphAnimFrame = null;
+  restoreOverlayFocus();
 }
 
 graphViewBtn.addEventListener("click", () => {
+  lastOverlayTrigger = document.getElementById("list-menu-btn");
   showList();
   openGraphView();
 });
@@ -4626,9 +4662,11 @@ function openMindmapView() {
 
 function closeMindmapView() {
   mindmapViewOverlay.classList.add("hidden");
+  restoreOverlayFocus();
 }
 
 mindmapViewBtn.addEventListener("click", () => {
+  lastOverlayTrigger = document.getElementById("editor-menu-btn");
   openMindmapView();
 });
 mindmapViewClose.addEventListener("click", closeMindmapView);
@@ -4856,8 +4894,10 @@ function openWhiteboard() {
 }
 function closeWhiteboard() {
   whiteboardOverlay.classList.add("hidden");
+  restoreOverlayFocus();
 }
 whiteboardBtn.addEventListener("click", () => {
+  lastOverlayTrigger = document.getElementById("list-menu-btn");
   showList();
   openWhiteboard();
 });
@@ -4968,11 +5008,15 @@ function renderTasksView() {
 }
 
 tasksViewBtn.addEventListener("click", () => {
+  lastOverlayTrigger = document.getElementById("list-menu-btn");
   showList();
   tasksViewOverlay.classList.remove("hidden");
   renderTasksView();
 });
-tasksViewClose.addEventListener("click", () => tasksViewOverlay.classList.add("hidden"));
+tasksViewClose.addEventListener("click", () => {
+  tasksViewOverlay.classList.add("hidden");
+  restoreOverlayFocus();
+});
 tasksHideDoneBtn.addEventListener("click", () => {
   tasksHideDone = !tasksHideDone;
   savePref("noteflow.tasks.hideDone", tasksHideDone);
@@ -5092,11 +5136,13 @@ function addBacklinksSection(title, entries, emptyText) {
     textWrap.className = "backlink-text";
     const labelEl = document.createElement("span");
     labelEl.textContent = broken ? `${label} (lien brisé)` : label;
+    labelEl.title = labelEl.textContent;
     textWrap.appendChild(labelEl);
     if (sub) {
       const subEl = document.createElement("span");
       subEl.className = "backlink-extract";
       subEl.textContent = sub;
+      subEl.title = sub;
       textWrap.appendChild(subEl);
     }
     li.appendChild(textWrap);

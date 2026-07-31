@@ -26,6 +26,18 @@
   --mesh-2: rgba(23, 20, 15, 0.10);
   --mesh-3: rgba(140, 132, 116, 0.18);
   --mesh-4: rgba(217, 169, 77, 0.16);
+
+  /* Stacking scale — every fixed/absolute overlay in the app picks one of
+     these named tiers instead of an ad-hoc number, so a new component can't
+     accidentally land between two existing layers by guesswork. Values match
+     what was already in effect; only the naming changed. */
+  --z-popover: 20;
+  --z-dropdown: 30;
+  --z-dropdown-alt: 35;
+  --z-modal: 50;
+  --z-modal-overlay: 55;
+  --z-modal-tooltip: 56;
+  --z-toast: 999;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -242,6 +254,10 @@ body {
   .mesh-blob { animation: none; }
 }
 
+body.mesh-paused .mesh-blob {
+  animation-play-state: paused;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
@@ -374,7 +390,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  z-index: 30;
+  z-index: var(--z-dropdown);
   animation: menuIn 0.15s var(--ease);
 }
 
@@ -465,7 +481,7 @@ button {
   border-radius: 50%;
   background: var(--gold);
   pointer-events: none;
-  z-index: 999;
+  z-index: var(--z-toast);
   animation: goldDustFly 0.5s ease-out forwards;
 }
 
@@ -615,7 +631,7 @@ button {
   border-radius: 14px;
   box-shadow: var(--shadow-hover);
   padding: 6px;
-  z-index: 35;
+  z-index: var(--z-dropdown-alt);
   animation: menuIn 0.15s var(--ease);
 }
 
@@ -1308,7 +1324,7 @@ button {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  padding: 6px;
+  padding: 9px;
   border-radius: 999px;
   transition: color 0.15s var(--ease), background-color 0.15s var(--ease);
 }
@@ -1789,6 +1805,19 @@ select option {
     max-height: 45vh;
     border-left: none;
     border-top: 1px solid var(--border);
+  }
+
+  /* Below 16px, iOS Safari zooms the whole page in on focus instead of just
+     showing the keyboard — jarring on any input, worst of all on the PIN
+     field. Scoped to mobile widths so the denser desktop typography is
+     untouched. */
+  .search-input,
+  .folder-input,
+  .properties-input,
+  .sync-code-input,
+  .sync-textarea,
+  .lock-input {
+    font-size: 16px;
   }
 }
 
@@ -2299,7 +2328,7 @@ select option {
   font-size: 14px;
   box-shadow: var(--shadow-hover);
   max-width: calc(100% - 32px);
-  z-index: 10;
+  z-index: var(--z-toast);
   animation: toastIn 0.3s var(--ease);
 }
 
@@ -2344,14 +2373,22 @@ a:focus-visible,
 /* Slim, unobtrusive scrollbars for desktop */
 .notes-list::-webkit-scrollbar,
 .page-scroll::-webkit-scrollbar,
-.toolbar::-webkit-scrollbar {
+.toolbar::-webkit-scrollbar,
+.history-list::-webkit-scrollbar,
+.custom-select-list::-webkit-scrollbar,
+.split-view-results::-webkit-scrollbar,
+.split-view-content::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 .notes-list::-webkit-scrollbar-thumb,
 .page-scroll::-webkit-scrollbar-thumb,
-.toolbar::-webkit-scrollbar-thumb {
+.toolbar::-webkit-scrollbar-thumb,
+.history-list::-webkit-scrollbar-thumb,
+.custom-select-list::-webkit-scrollbar-thumb,
+.split-view-results::-webkit-scrollbar-thumb,
+.split-view-content::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--muted) 40%, transparent);
   border-radius: 999px;
 }
@@ -2467,7 +2504,7 @@ a:focus-visible,
 .lock-overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2551,10 +2588,16 @@ a:focus-visible,
 .graph-view-overlay {
   position: fixed;
   inset: 0;
-  z-index: 55;
+  z-index: var(--z-modal-overlay);
   background: var(--bg);
   display: flex;
   flex-direction: column;
+  /* Full-bleed overlay (graph/mindmap/whiteboard/tasks views all share this
+     class) — unlike the centered lock-overlay/command-palette, its header
+     sits flush against the top edge, so it needs its own safe-area padding
+     instead of relying on .app's. */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .graph-view-header {
@@ -2577,7 +2620,7 @@ a:focus-visible,
 
 .graph-tooltip {
   position: fixed;
-  z-index: 56;
+  z-index: var(--z-modal-tooltip);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2726,7 +2769,7 @@ a:focus-visible,
 .command-palette {
   position: fixed;
   inset: 0;
-  z-index: 55;
+  z-index: var(--z-modal-overlay);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -2802,7 +2845,7 @@ a:focus-visible,
 
 .wikilink-autocomplete {
   position: absolute;
-  z-index: 20;
+  z-index: var(--z-popover);
   list-style: none;
   margin: 0;
   padding: 6px;
@@ -2818,7 +2861,7 @@ a:focus-visible,
 
 .wikilink-hover-preview {
   position: absolute;
-  z-index: 20;
+  z-index: var(--z-popover);
   width: min(340px, 80vw);
   max-height: 260px;
   overflow-y: auto;
@@ -2835,7 +2878,7 @@ a:focus-visible,
 
 .link-suggestion-popup {
   position: absolute;
-  z-index: 20;
+  z-index: var(--z-popover);
   display: flex;
   align-items: center;
   gap: 6px;

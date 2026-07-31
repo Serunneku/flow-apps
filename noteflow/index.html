@@ -74,11 +74,11 @@
       </div>
       <div class="topbar-actions">
         <input id="import-input" type="file" accept="application/json,.json,.ics,.vcf,.noteflow,.md" class="hidden" multiple />
-        <button id="cmdk-btn" class="icon-btn cmdk-trigger" type="button" title="Palette de commandes (⌘K)">⌘K</button>
-        <button id="conflict-btn" class="icon-btn cmdk-trigger hidden" type="button" title="Conflits de synchronisation en attente"></button>
-        <button id="theme-toggle" class="icon-btn" type="button" title="Thème"><svg class="icon"><use href="#icon-contrast"/></svg></button>
+        <button id="cmdk-btn" class="icon-btn cmdk-trigger" type="button" title="Palette de commandes (⌘K)" aria-label="Palette de commandes">⌘K</button>
+        <button id="conflict-btn" class="icon-btn cmdk-trigger hidden" type="button" title="Conflits de synchronisation en attente" aria-label="Conflits de synchronisation en attente"></button>
+        <button id="theme-toggle" class="icon-btn" type="button" title="Thème" aria-label="Changer de thème"><svg class="icon"><use href="#icon-contrast"/></svg></button>
         <div class="menu-wrap">
-          <button id="list-menu-btn" class="icon-btn" type="button" title="Plus d'options"><svg class="icon"><use href="#icon-more"/></svg></button>
+          <button id="list-menu-btn" class="icon-btn" type="button" title="Plus d'options" aria-label="Plus d'options" aria-haspopup="true"><svg class="icon"><use href="#icon-more"/></svg></button>
           <div id="list-menu" class="menu-panel hidden">
             <button class="menu-item" id="export-btn" type="button"><svg class="icon"><use href="#icon-download"/></svg>Exporter les notes</button>
             <button class="menu-item" id="import-btn" type="button"><svg class="icon"><use href="#icon-upload"/></svg>Importer des notes</button>
@@ -107,7 +107,7 @@
             <button class="menu-item" id="view-trash-btn" type="button"><svg class="icon"><use href="#icon-trash"/></svg>Corbeille</button>
           </div>
         </div>
-        <button id="new-note-btn" class="icon-btn primary" type="button" title="Nouvelle note"><svg class="icon"><use href="#icon-plus"/></svg></button>
+        <button id="new-note-btn" class="icon-btn primary" type="button" title="Nouvelle note" aria-label="Nouvelle note"><svg class="icon"><use href="#icon-plus"/></svg></button>
       </div>
     </header>
 
@@ -228,8 +228,8 @@
     <div class="search-row">
       <svg class="icon search-icon"><use href="#icon-search"/></svg>
       <input id="search-input" type="search" class="search-input" placeholder="Rechercher… tag: dossier: est: avant: (⌘F)" autocomplete="off" title="tag:x  dossier:x  est:verrouillée/archivée/épinglée  avant:AAAA-MM-JJ  apres:AAAA-MM-JJ  &quot;phrase&quot;  -exclusion" />
-      <button id="save-search-btn" class="icon-btn" type="button" title="Enregistrer cette recherche"><svg class="icon"><use href="#icon-star"/></svg></button>
-      <button id="semantic-search-toggle" class="icon-btn" type="button" title="Recherche par sens (rapproche les notes par vocabulaire partagé, pas seulement par correspondance exacte)"><svg class="icon"><use href="#icon-link"/></svg></button>
+      <button id="save-search-btn" class="icon-btn" type="button" title="Enregistrer cette recherche" aria-label="Enregistrer cette recherche"><svg class="icon"><use href="#icon-star"/></svg></button>
+      <button id="semantic-search-toggle" class="icon-btn" type="button" title="Recherche par sens (rapproche les notes par vocabulaire partagé, pas seulement par correspondance exacte)" aria-label="Recherche par sens"><svg class="icon"><use href="#icon-link"/></svg></button>
       <select id="sort-select" title="Trier">
         <option value="recent">Récentes</option>
         <option value="title">Titre A-Z</option>
@@ -251,9 +251,9 @@
       <button id="back-btn" class="icon-btn" type="button" aria-label="Retour"><svg class="icon"><use href="#icon-back"/></svg></button>
       <span id="save-indicator" class="save-indicator"></span>
       <div class="topbar-actions">
-        <button id="pin-btn" class="icon-btn" type="button" title="Épingler"><svg class="icon"><use href="#icon-pin"/></svg></button>
+        <button id="pin-btn" class="icon-btn" type="button" title="Épingler" aria-label="Épingler la note"><svg class="icon"><use href="#icon-pin"/></svg></button>
         <div class="menu-wrap">
-          <button id="editor-menu-btn" class="icon-btn" type="button" title="Plus d'options"><svg class="icon"><use href="#icon-more"/></svg></button>
+          <button id="editor-menu-btn" class="icon-btn" type="button" title="Plus d'options" aria-label="Plus d'options" aria-haspopup="true"><svg class="icon"><use href="#icon-more"/></svg></button>
           <div id="editor-menu" class="menu-panel hidden">
             <button class="menu-item" id="duplicate-note-btn" type="button"><svg class="icon"><use href="#icon-duplicate"/></svg>Dupliquer</button>
             <button class="menu-item" id="save-as-template-btn" type="button"><svg class="icon"><use href="#icon-duplicate"/></svg>Enregistrer comme modèle</button>
@@ -493,7 +493,7 @@
         <div class="split-view-header">
           <input id="split-view-search" type="text" class="sync-code-input" placeholder="Afficher une autre note ici…" autocomplete="off" />
           <button type="button" id="split-view-edit-toggle" class="link-btn hidden">Modifier</button>
-          <button type="button" id="split-view-close" class="icon-btn" title="Fermer le volet"><svg class="icon"><use href="#icon-close"/></svg></button>
+          <button type="button" id="split-view-close" class="icon-btn" title="Fermer le volet" aria-label="Fermer le volet"><svg class="icon"><use href="#icon-close"/></svg></button>
         </div>
         <ul id="split-view-results" class="cmdk-list split-view-results hidden"></ul>
         <div id="split-view-content" class="split-view-content"></div>
@@ -532,9 +532,9 @@
   <div id="journal-calendar-overlay" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Calendrier du journal">
     <div class="cmdk-box journal-calendar-box">
       <div class="journal-calendar-header">
-        <button type="button" id="journal-cal-prev" class="icon-btn" title="Mois précédent">‹</button>
+        <button type="button" id="journal-cal-prev" class="icon-btn" title="Mois précédent" aria-label="Mois précédent">‹</button>
         <span id="journal-cal-month-label"></span>
-        <button type="button" id="journal-cal-next" class="icon-btn" title="Mois suivant">›</button>
+        <button type="button" id="journal-cal-next" class="icon-btn" title="Mois suivant" aria-label="Mois suivant">›</button>
       </div>
       <div id="journal-cal-grid" class="journal-calendar-grid"></div>
     </div>
@@ -543,7 +543,7 @@
   <div id="graph-view-overlay" class="graph-view-overlay hidden" role="dialog" aria-modal="true" aria-label="Vue graphe des notes">
     <div class="graph-view-header">
       <span id="graph-view-count"></span>
-      <button type="button" id="graph-view-close" class="icon-btn" title="Fermer"><svg class="icon"><use href="#icon-close"/></svg></button>
+      <button type="button" id="graph-view-close" class="icon-btn" title="Fermer" aria-label="Fermer la vue graphe"><svg class="icon"><use href="#icon-close"/></svg></button>
     </div>
     <canvas id="graph-canvas"></canvas>
     <div id="graph-tooltip" class="graph-tooltip hidden"></div>
@@ -552,7 +552,7 @@
   <div id="mindmap-view-overlay" class="graph-view-overlay hidden" role="dialog" aria-modal="true" aria-label="Carte mentale de la note">
     <div class="graph-view-header">
       <span id="mindmap-view-title"></span>
-      <button type="button" id="mindmap-view-close" class="icon-btn" title="Fermer"><svg class="icon"><use href="#icon-close"/></svg></button>
+      <button type="button" id="mindmap-view-close" class="icon-btn" title="Fermer" aria-label="Fermer la carte mentale"><svg class="icon"><use href="#icon-close"/></svg></button>
     </div>
     <canvas id="mindmap-canvas"></canvas>
   </div>
@@ -566,7 +566,7 @@
         <button type="button" id="whiteboard-add-card-btn" title="Nouvelle carte de texte">+ Carte</button>
         <button type="button" id="whiteboard-undo-btn" title="Annuler le dernier trait"><svg class="icon"><use href="#icon-undo"/></svg></button>
       </div>
-      <button type="button" id="whiteboard-close" class="icon-btn" title="Fermer"><svg class="icon"><use href="#icon-close"/></svg></button>
+      <button type="button" id="whiteboard-close" class="icon-btn" title="Fermer" aria-label="Fermer le tableau blanc"><svg class="icon"><use href="#icon-close"/></svg></button>
     </div>
     <div id="whiteboard-world-wrap">
       <div id="whiteboard-world">
@@ -579,8 +579,8 @@
   <div id="tasks-view-overlay" class="graph-view-overlay hidden" role="dialog" aria-modal="true" aria-label="Toutes les tâches">
     <div class="graph-view-header">
       <span id="tasks-view-count"></span>
-      <button type="button" id="tasks-hide-done-btn" class="icon-btn" title="Masquer les tâches cochées"><svg class="icon"><use href="#icon-checklist"/></svg></button>
-      <button type="button" id="tasks-view-close" class="icon-btn" title="Fermer"><svg class="icon"><use href="#icon-close"/></svg></button>
+      <button type="button" id="tasks-hide-done-btn" class="icon-btn" title="Masquer les tâches cochées" aria-label="Masquer les tâches cochées" aria-pressed="false"><svg class="icon"><use href="#icon-checklist"/></svg></button>
+      <button type="button" id="tasks-view-close" class="icon-btn" title="Fermer" aria-label="Fermer la vue des tâches"><svg class="icon"><use href="#icon-close"/></svg></button>
     </div>
     <ul id="tasks-view-list" class="history-list tasks-view-list"></ul>
   </div>
