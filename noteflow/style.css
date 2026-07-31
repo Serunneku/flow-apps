@@ -2647,6 +2647,115 @@ a:focus-visible,
   border-radius: 50%;
 }
 
+/* --- Kanban board: three fixed columns on a cork-board wash, cards as
+   post-its with a colored pin — dressed in the app's own palette instead of
+   a generic project-management look, since this shares screen space with
+   the paper/ink identity everywhere else. --- */
+.kanban-hint {
+  padding: 8px 16px 0;
+  margin: 0;
+}
+
+.kanban-board {
+  flex: 1;
+  display: flex;
+  gap: 14px;
+  padding: 14px 16px calc(20px + env(safe-area-inset-bottom));
+  overflow-x: auto;
+  align-items: flex-start;
+}
+
+.kanban-column {
+  flex: 1 0 240px;
+  max-width: 320px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: color-mix(in srgb, var(--gold) 7%, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  min-height: 120px;
+  transition: box-shadow 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+.kanban-column.drag-over {
+  box-shadow: 0 0 0 2px var(--gold);
+  border-color: var(--gold);
+}
+
+.kanban-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 2px 2px;
+}
+
+.kanban-column-count {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.kanban-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+  transition: box-shadow 0.15s var(--ease), transform 0.15s var(--ease), opacity 0.15s var(--ease);
+}
+
+.kanban-card:hover {
+  box-shadow: var(--shadow-hover);
+}
+
+.kanban-card:active {
+  cursor: grabbing;
+}
+
+.kanban-card.dragging {
+  opacity: 0.4;
+  transform: rotate(-2deg) scale(0.98);
+}
+
+.kanban-card-pin {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.kanban-card-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.kanban-card-preview {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.kanban-empty {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  padding: 10px 0;
+  opacity: 0.8;
+}
+
 #graph-canvas,
 #mindmap-canvas {
   flex: 1;

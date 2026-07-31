@@ -1746,6 +1746,10 @@ function finishRenderList(visible, query, highlightTerm, preserveOrder) {
       if (sortMode === "manual") return (a.order ?? 0) - (b.order ?? 0);
       if (sortMode === "title") return (a.title || "").localeCompare(b.title || "", "fr");
       if (sortMode === "created") return b.createdAt - a.createdAt;
+      // Consultation frequency, not edit recency — a note reopened often for
+      // reference but rarely edited would otherwise sink in "Récentes"
+      // (sorted by updatedAt) even though it's clearly the one in use.
+      if (sortMode === "frequency") return (b.openCount || 0) - (a.openCount || 0) || (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0);
       return b.updatedAt - a.updatedAt;
     });
   }
@@ -2187,6 +2191,7 @@ async function openNote(id) {
   if (!currentNote) return;
   recordRecentNote(id);
   currentNote.lastOpenedAt = Date.now();
+  currentNote.openCount = (currentNote.openCount || 0) + 1;
   persistNote(currentNote);
   if (currentNote.locked) {
     showLockOverlay();
@@ -5084,6 +5089,131 @@ tasksHideDoneBtn.addEventListener("click", () => {
   renderTasksView();
 });
 
+// --- Kanban view: a lightweight board over whatever folder/tag filter is
+// active in the list (or the whole vault if none), grouped by a "statut"
+// note property — no new data model, it reuses the existing free-form
+// properties system so a card's column is also just a normal `prop:statut:…`
+// search clause. Scoped to the current filter rather than the whole
+// notebook: an unscoped board of hundreds of notes in three columns would
+// be closer to noise than a project view. ---
+const kanbanViewBtn = document.getElementById("kanban-view-btn");
+const kanbanViewOverlay = document.getElementById("kanban-view-overlay");
+const kanbanViewClose = document.getElementById("kanban-view-close");
+const kanbanViewCount = document.getElementById("kanban-view-count");
+const kanbanBoardEl = document.getElementById("kanban-board");
+const KANBAN_COLUMNS = [
+  { key: "a-faire", label: "À faire" },
+  { key: "en-cours", label: "En cours" },
+  { key: "fait", label: "Fait" },
+];
+
+function noteKanbanStatus(note) {
+  const raw = note.properties && note.properties.statut;
+  return KANBAN_COLUMNS.some((c) => c.key === raw) ? raw : "a-faire";
+}
+
+function kanbanScopedNotes() {
+  return notesInActiveVault().filter((n) => {
+    if (n.deletedAt || n.archived || n.locked) return false;
+    if (activeFolderFilter && n.folder !== activeFolderFilter && !(n.folder || "").startsWith(activeFolderFilter + "/")) return false;
+    if (activeTagFilter && !(n.tags || []).includes(activeTagFilter)) return false;
+    return true;
+  });
+}
+
+function renderKanbanCard(note) {
+  const card = document.createElement("div");
+  card.className = "kanban-card";
+  card.draggable = true;
+  card.dataset.noteId = note.id;
+  const pin = document.createElement("span");
+  pin.className = "kanban-card-pin";
+  pin.style.background = note.folder ? folderColor(note.folder) : "var(--gold)";
+  const title = document.createElement("div");
+  title.className = "kanban-card-title";
+  title.appendChild(pin);
+  title.appendChild(document.createTextNode(note.title || "Sans titre"));
+  card.appendChild(title);
+  const preview = getPreview(note);
+  if (preview) {
+    const previewEl = document.createElement("div");
+    previewEl.className = "kanban-card-preview";
+    previewEl.textContent = preview;
+    card.appendChild(previewEl);
+  }
+  card.addEventListener("click", () => {
+    kanbanViewOverlay.classList.add("hidden");
+    goToNote(note.id);
+  });
+  card.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData("text/plain", note.id);
+    card.classList.add("dragging");
+  });
+  card.addEventListener("dragend", () => card.classList.remove("dragging"));
+  return card;
+}
+
+function renderKanban() {
+  const scoped = kanbanScopedNotes();
+  kanbanViewCount.textContent = `${scoped.length} note${scoped.length > 1 ? "s" : ""}` + (activeFolderFilter ? ` · ${activeFolderFilter}` : "") + (activeTagFilter ? ` · #${activeTagFilter}` : "");
+  kanbanBoardEl.innerHTML = "";
+  KANBAN_COLUMNS.forEach((col) => {
+    const colEl = document.createElement("div");
+    colEl.className = "kanban-column";
+    colEl.dataset.status = col.key;
+    const header = document.createElement("div");
+    header.className = "kanban-column-header";
+    const label = document.createElement("span");
+    label.textContent = col.label;
+    const colNotes = scoped.filter((n) => noteKanbanStatus(n) === col.key);
+    const count = document.createElement("span");
+    count.className = "kanban-column-count";
+    count.textContent = String(colNotes.length);
+    header.appendChild(label);
+    header.appendChild(count);
+    colEl.appendChild(header);
+    if (!colNotes.length) {
+      const empty = document.createElement("div");
+      empty.className = "kanban-empty";
+      empty.textContent = "Vide";
+      colEl.appendChild(empty);
+    } else {
+      colNotes.forEach((n) => colEl.appendChild(renderKanbanCard(n)));
+    }
+    colEl.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      colEl.classList.add("drag-over");
+    });
+    colEl.addEventListener("dragleave", () => colEl.classList.remove("drag-over"));
+    colEl.addEventListener("drop", (e) => {
+      e.preventDefault();
+      colEl.classList.remove("drag-over");
+      const noteId = e.dataTransfer.getData("text/plain");
+      const note = notes.find((n) => n.id === noteId);
+      if (!note || noteKanbanStatus(note) === col.key) return;
+      if (!note.properties) note.properties = {};
+      note.properties.statut = col.key;
+      note.updatedAt = Date.now();
+      persistNote(note);
+      renderKanban();
+    });
+    kanbanBoardEl.appendChild(colEl);
+  });
+}
+
+function closeKanbanView() {
+  kanbanViewOverlay.classList.add("hidden");
+  restoreOverlayFocus();
+}
+
+kanbanViewBtn.addEventListener("click", () => {
+  lastOverlayTrigger = document.getElementById("list-menu-btn");
+  showList();
+  kanbanViewOverlay.classList.remove("hidden");
+  renderKanban();
+});
+kanbanViewClose.addEventListener("click", closeKanbanView);
+
 // --- Vaults panel: switch/create/rename/delete workspaces. ---
 const vaultsBtn = document.getElementById("vaults-btn");
 const vaultsBtnCurrent = document.getElementById("vaults-btn-current");
@@ -5220,6 +5350,56 @@ function addBacklinksSection(title, entries, emptyText) {
   });
 }
 
+// --- Related notes: a heuristic suggestion panel, distinct from the
+// explicit wikilink backlinks above it — surfaces connections the user
+// never typed a [[link]] for, based on shared tags (strong signal) and
+// shared significant words in title/preview (weaker signal). Nothing here
+// is stored; it's recomputed each time the backlinks panel renders. ---
+const RELATED_STOPWORDS_FR = new Set([
+  "le", "la", "les", "de", "des", "du", "un", "une", "et", "ou", "est",
+  "pour", "avec", "dans", "sur", "au", "aux", "que", "qui", "ne", "pas",
+  "plus", "ce", "cette", "ces", "son", "sa", "ses", "en", "à", "a", "il",
+  "elle", "nous", "vous", "ils", "elles", "se", "ça", "je", "tu", "on",
+  "par", "sans", "sous", "mais", "donc", "or", "ni", "car", "tout", "toute",
+  "être", "avoir", "fait", "faire", "cela", "leur", "leurs", "dont", "où",
+]);
+
+function relatedNotesSignificantWords(text) {
+  const matches = text.toLowerCase().match(/[a-zàâäéèêëïîôöùûüçñ0-9]{4,}/g) || [];
+  return new Set(matches.filter((w) => !RELATED_STOPWORDS_FR.has(w)));
+}
+
+function findRelatedNotes(note, excludeIds) {
+  const noteTags = new Set((note.tags || []).map((t) => t.toLowerCase()));
+  const noteWords = note.locked ? new Set() : relatedNotesSignificantWords((note.title || "") + " " + getPreview(note));
+  if (!noteTags.size && !noteWords.size) return [];
+  const scored = [];
+  notes.forEach((n) => {
+    if (n.id === note.id || n.deletedAt || n.archived || excludeIds.has(n.id)) return;
+    if ((n.vaultId || DEFAULT_VAULT_ID) !== activeVaultId) return;
+    const tags = new Set((n.tags || []).map((t) => t.toLowerCase()));
+    const sharedTags = [...noteTags].filter((t) => tags.has(t));
+    let sharedWordsCount = 0;
+    if (!n.locked) {
+      const words = relatedNotesSignificantWords((n.title || "") + " " + getPreview(n));
+      sharedWordsCount = [...noteWords].filter((w) => words.has(w)).length;
+    }
+    const score = sharedTags.length * 3 + sharedWordsCount;
+    if (score > 0) scored.push({ note: n, sharedTags, sharedWordsCount, score });
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, 5).map(({ note: n, sharedTags, sharedWordsCount }) => {
+    const why = sharedTags.length
+      ? `${sharedTags.length} tag${sharedTags.length > 1 ? "s" : ""} en commun : ${sharedTags.join(", ")}`
+      : `${sharedWordsCount} mot${sharedWordsCount > 1 ? "s" : ""}-clé${sharedWordsCount > 1 ? "s" : ""} en commun`;
+    return {
+      label: n.locked ? "🔒 " + (n.title || "Sans titre") : n.title || "Sans titre",
+      sub: why,
+      targetId: n.id,
+    };
+  });
+}
+
 function renderBacklinks() {
   backlinksListEl.innerHTML = "";
   const needle = `data-note-id="${currentNote.id}"`;
@@ -5252,6 +5432,12 @@ function renderBacklinks() {
   addBacklinksSection("Liens entrants", incoming, "Aucune note ne pointe encore ici.");
   addBacklinksSection("Liens sortants", outgoingLinks, "Cette note ne pointe vers aucune autre.");
   addBacklinksSection("Transclusions", transclusions, "Aucune transclusion dans cette note.");
+
+  const alreadyLinked = new Set(
+    [...incoming, ...outgoingLinks, ...transclusions].filter((e) => !e.broken).map((e) => e.targetId)
+  );
+  const related = findRelatedNotes(currentNote, alreadyLinked);
+  addBacklinksSection("Notes apparentées", related, "Aucune note apparentée trouvée.");
 }
 
 // --- Markdown-style shortcuts while typing ---
