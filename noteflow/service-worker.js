@@ -1,5 +1,5 @@
-const CACHE_NAME = "noteflow-v12";
-const ASSETS = ["./", "./index.html", "./style.css", "./app.js", "./manifest.json"];
+const CACHE_NAME = "noteflow-v14";
+const ASSETS = ["./", "./index.html", "./style.css", "./app.js", "./manifest.json", "./search-worker.js"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)));

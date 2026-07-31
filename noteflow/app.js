@@ -91,6 +91,38 @@ let listView = "active"; // "active" | "archived" | "trash"
 let selectionMode = false;
 let selectedIds = new Set();
 
+// --- Vaults: fully separate note collections within the same install (e.g.
+// "Pro" / "Perso"). All notes stay in one array/one IndexedDB store — a
+// vault is just a partition tag (note.vaultId) plus a filter applied at
+// every point notes get discovered by title/tag/folder rather than by a
+// specific id already known to belong to the current vault. ---
+const VAULTS_KEY = "noteflow.vaults";
+const ACTIVE_VAULT_KEY = "noteflow.activeVaultId";
+const DEFAULT_VAULT_ID = "default";
+function loadVaults() {
+  const list = loadPref(VAULTS_KEY, null);
+  if (Array.isArray(list) && list.length) return list;
+  return [{ id: DEFAULT_VAULT_ID, name: "Principal" }];
+}
+function saveVaults(list) {
+  savePref(VAULTS_KEY, list);
+}
+let vaults = loadVaults();
+let activeVaultId = loadPref(ACTIVE_VAULT_KEY, DEFAULT_VAULT_ID);
+if (!vaults.find((v) => v.id === activeVaultId)) activeVaultId = vaults[0].id;
+function setActiveVault(id) {
+  activeVaultId = id;
+  savePref(ACTIVE_VAULT_KEY, id);
+  activeFolderFilter = null;
+  activeTagFilter = null;
+  searchQuery = "";
+  if (searchInput) searchInput.value = "";
+  renderList();
+}
+function notesInActiveVault() {
+  return notes.filter((n) => (n.vaultId || DEFAULT_VAULT_ID) === activeVaultId);
+}
+
 // --- Synthesized sound design (off by default — a note app should never
 // make noise without being asked to) ---
 let soundEnabled = loadPref(PREF_KEYS.sound, false);
@@ -562,6 +594,7 @@ function showList() {
   if (activeRecorder && activeRecorder.state === "recording") {
     activeRecorder.stop();
   }
+  flushSplitViewSave();
   // Leaving a locked note's editor always re-locks it in memory too: its
   // plaintext body/drawing/history are dropped and the unlock key forgotten,
   // so reopening it requires the PIN again, exactly like before encryption.
@@ -748,11 +781,18 @@ importInput.addEventListener("change", async () => {
       const count = await importEncryptedPacket(packet);
       if (count) showToast("Note déchiffrée et importée");
     } else if (name.endsWith(".md")) {
-      const note = importMarkdown(await file.text());
-      notes.unshift(note);
-      await persistNote(note);
+      const mdFiles = Array.from(importInput.files).filter((f) => f.name.toLowerCase().endsWith(".md"));
+      const imported = [];
+      for (const f of mdFiles) {
+        imported.push(importMarkdown(await f.text(), f.name));
+      }
+      resolveImportedWikilinks(imported);
+      for (const note of imported) {
+        notes.unshift(note);
+        await persistNote(note);
+      }
       renderList();
-      showToast("Note importée depuis Markdown");
+      showToast(`${imported.length} note${imported.length > 1 ? "s" : ""} importée${imported.length > 1 ? "s" : ""} depuis Markdown`);
     } else {
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -889,11 +929,11 @@ function folderDisplayColor(folder) {
 }
 
 function allFolders() {
-  return [...new Set(notes.map((n) => n.folder).filter(Boolean))];
+  return [...new Set(notesInActiveVault().map((n) => n.folder).filter(Boolean))];
 }
 
 function allTags() {
-  return [...new Set(notes.flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
+  return [...new Set(notesInActiveVault().flatMap((n) => n.tags || []))].sort((a, b) => a.localeCompare(b, "fr"));
 }
 
 // --- Global tag manager: rename (or merge, by renaming to an existing tag)
@@ -1203,7 +1243,7 @@ function renderFolderFilters() {
   // means tens of thousands of comparisons on every render, including on
   // every keystroke in the search box).
   const exactCounts = new Map();
-  notes.forEach((n) => {
+  notesInActiveVault().forEach((n) => {
     if (n.deletedAt || !n.folder) return;
     exactCounts.set(n.folder, (exactCounts.get(n.folder) || 0) + 1);
   });
@@ -1468,7 +1508,15 @@ function parseSearchQuery(raw) {
 }
 
 function noteHaystack(note) {
-  return (note.title + " " + (note.folder || "") + " " + (note.tags || []).join(" ") + " " + (note.locked ? "" : getPreview(note))).toLowerCase();
+  return (
+    note.title +
+    " " +
+    (note.folder || "") +
+    " " +
+    (note.tags || []).join(" ") +
+    " " +
+    (note.locked ? "" : getPreview(note) + " " + (note.ocrText || ""))
+  ).toLowerCase();
 }
 
 function clauseMatches(note, clause) {
@@ -1502,6 +1550,128 @@ function noteMatchesQuery(note, clauses) {
   return clauses.every((c) => (c.negate ? !clauseMatches(note, c) : clauseMatches(note, c)));
 }
 
+// --- Local "semantic" search: no embedding model ships with the app (that
+// would mean a multi-megabyte download and a build step neither of which
+// fit a single-file, offline-first PWA) — instead, a TF-IDF vector space
+// over each note's own vocabulary, ranked by cosine similarity to the
+// query. It surfaces notes that share topical vocabulary with the query
+// even when no exact substring matches, which is the practical win users
+// actually want out of "search by meaning" day to day. Entirely local,
+// recomputed from scratch on each search (no persisted index to go stale). ---
+const SEMANTIC_SEARCH_PREF_KEY = "noteflow.semanticSearch";
+let semanticSearchMode = loadPref(SEMANTIC_SEARCH_PREF_KEY, false);
+const STOPWORDS_FR = new Set([
+  "le", "la", "les", "de", "des", "du", "un", "une", "et", "à", "a", "en", "que", "qui", "pour", "dans", "sur",
+  "au", "aux", "ce", "ces", "cette", "cet", "se", "sa", "son", "ses", "est", "sont", "avec", "par", "ne", "pas",
+  "plus", "ou", "mais", "comme", "je", "tu", "il", "elle", "nous", "vous", "ils", "elles", "d", "l", "c", "qu",
+  "on", "y", "si", "the", "and", "of", "to", "in", "for", "with", "is", "are",
+]);
+
+function tokenizeForSemanticSearch(text) {
+  return (text.toLowerCase().match(/[a-zàâäéèêëïîôöùûüçñ]+/gi) || [])
+    .map((t) => t.normalize("NFD").replace(/[̀-ͯ]/g, ""))
+    .filter((t) => t.length > 2 && !STOPWORDS_FR.has(t));
+}
+
+function semanticSearch(candidates, query) {
+  const docs = candidates.map((n) => ({ note: n, tokens: tokenizeForSemanticSearch(noteHaystack(n)) }));
+  const df = new Map();
+  docs.forEach((d) => {
+    new Set(d.tokens).forEach((t) => df.set(t, (df.get(t) || 0) + 1));
+  });
+  const total = docs.length || 1;
+  const idf = (t) => Math.log(1 + total / (1 + (df.get(t) || 0)));
+  const vectorize = (tokens) => {
+    const tf = new Map();
+    tokens.forEach((t) => tf.set(t, (tf.get(t) || 0) + 1));
+    const vec = new Map();
+    tf.forEach((count, t) => vec.set(t, count * idf(t)));
+    return vec;
+  };
+  const norm = (vec) => {
+    let sum = 0;
+    vec.forEach((v) => (sum += v * v));
+    return Math.sqrt(sum) || 1;
+  };
+  const cosine = (a, b) => {
+    let dot = 0;
+    const [small, big] = a.size < b.size ? [a, b] : [b, a];
+    small.forEach((v, k) => {
+      if (big.has(k)) dot += v * big.get(k);
+    });
+    return dot / (norm(a) * norm(b));
+  };
+  const qVec = vectorize(tokenizeForSemanticSearch(query));
+  return docs
+    .map((d) => ({ note: d.note, score: cosine(qVec, vectorize(d.tokens)) }))
+    .filter((s) => s.score > 0.04)
+    .sort((a, b) => b.score - a.score)
+    .map((s) => s.note);
+}
+
+// --- Search offloaded to a Web Worker once the notebook is big enough that
+// the query-matching pass could visibly stutter the UI on the main thread.
+// Below the threshold, filtering runs inline (unchanged, no worker
+// round-trip overhead for the common case of a small notebook). ---
+const SEARCH_WORKER_THRESHOLD = 300;
+let searchWorker = null;
+let searchWorkerRequestId = 0;
+const searchWorkerPending = new Map();
+
+function getSearchWorker() {
+  if (searchWorker) return searchWorker;
+  try {
+    searchWorker = new Worker("search-worker.js");
+    searchWorker.addEventListener("message", (e) => {
+      const { requestId, matchedIds } = e.data;
+      const resolve = searchWorkerPending.get(requestId);
+      if (resolve) {
+        searchWorkerPending.delete(requestId);
+        resolve(matchedIds);
+      }
+    });
+    searchWorker.addEventListener("error", () => {
+      // A worker script error aborts the worker silently otherwise — reject
+      // every pending request so callers fall back instead of hanging.
+      searchWorkerPending.forEach((resolve) => resolve(null));
+      searchWorkerPending.clear();
+    });
+  } catch {
+    searchWorker = null;
+  }
+  return searchWorker;
+}
+
+async function searchWithWorker(candidates, query) {
+  const worker = getSearchWorker();
+  if (!worker) throw new Error("Web Worker unavailable");
+  const requestId = ++searchWorkerRequestId;
+  const items = candidates.map((n) => ({
+    id: n.id,
+    tags: n.tags || [],
+    folder: n.folder || "",
+    updatedAt: n.updatedAt || 0,
+    locked: !!n.locked,
+    archived: !!n.archived,
+    pinned: !!n.pinned,
+    properties: n.properties || {},
+    haystack: noteHaystack(n),
+  }));
+  const matchedIds = await new Promise((resolve) => {
+    searchWorkerPending.set(requestId, resolve);
+    worker.postMessage({ requestId, items, query });
+  });
+  // A newer keystroke may have started another search while this one was
+  // still in flight — that request will render its own (fresher) result
+  // shortly, so this one is dropped rather than falling back and briefly
+  // flashing stale results back onto the screen.
+  if (requestId !== searchWorkerRequestId) return SUPERSEDED;
+  if (matchedIds === null) throw new Error("Search worker failed");
+  const byId = new Map(candidates.map((n) => [n.id, n]));
+  return matchedIds.map((id) => byId.get(id)).filter(Boolean);
+}
+const SUPERSEDED = Symbol("superseded-search-request");
+
 function renderList() {
   notesListEl.classList.toggle("selection-mode", selectionMode);
   if (selectionMode) updateSelectionCount();
@@ -1516,7 +1686,8 @@ function renderList() {
     .map((c) => c.text)
     .join(" ")
     .trim();
-  let visible = notes.filter((n) => {
+  const scopeFiltered = notes.filter((n) => {
+    if ((n.vaultId || DEFAULT_VAULT_ID) !== activeVaultId) return false;
     if (listView === "trash" && !n.deletedAt) return false;
     if (listView === "archived" && (!n.archived || n.deletedAt)) return false;
     if (listView === "active" && (n.archived || n.deletedAt)) return false;
@@ -1527,17 +1698,46 @@ function renderList() {
     )
       return false;
     if (activeTagFilter && !(n.tags || []).includes(activeTagFilter)) return false;
-    if (queryClauses.length && !noteMatchesQuery(n, queryClauses)) return false;
     return true;
   });
 
-  visible.sort((a, b) => {
-    if (!!b.pinned - !!a.pinned !== 0) return !!b.pinned - !!a.pinned;
-    if (sortMode === "manual") return (a.order ?? 0) - (b.order ?? 0);
-    if (sortMode === "title") return (a.title || "").localeCompare(b.title || "", "fr");
-    if (sortMode === "created") return b.createdAt - a.createdAt;
-    return b.updatedAt - a.updatedAt;
-  });
+  if (query && semanticSearchMode) {
+    finishRenderList(semanticSearch(scopeFiltered, query), query, "", true);
+    return;
+  }
+
+  // The text-query match itself — the part whose cost actually scales with
+  // notebook size (parsing every note's stripped-HTML haystack) — is what
+  // gets offloaded to the search worker once there are enough notes for it
+  // to matter; everything else above is cheap primitive-field filtering
+  // that's not worth the postMessage round-trip.
+  if (query && scopeFiltered.length > SEARCH_WORKER_THRESHOLD) {
+    searchWithWorker(scopeFiltered, query)
+      .then((visible) => {
+        if (visible !== SUPERSEDED) finishRenderList(visible, query, highlightTerm);
+      })
+      .catch(() => finishRenderList(scopeFiltered.filter((n) => noteMatchesQuery(n, queryClauses)), query, highlightTerm));
+    return;
+  }
+
+  const visible = query ? scopeFiltered.filter((n) => noteMatchesQuery(n, queryClauses)) : scopeFiltered;
+  finishRenderList(visible, query, highlightTerm);
+}
+
+function finishRenderList(visible, query, highlightTerm, preserveOrder) {
+  // Semantic search already returns notes ranked by relevance to the query
+  // — re-sorting them by pinned/date/title would throw that ranking away,
+  // so preserveOrder skips it there (pinned notes lose their usual priority
+  // in that one mode, which is the right trade-off: relevance is the point).
+  if (!preserveOrder) {
+    visible.sort((a, b) => {
+      if (!!b.pinned - !!a.pinned !== 0) return !!b.pinned - !!a.pinned;
+      if (sortMode === "manual") return (a.order ?? 0) - (b.order ?? 0);
+      if (sortMode === "title") return (a.title || "").localeCompare(b.title || "", "fr");
+      if (sortMode === "created") return b.createdAt - a.createdAt;
+      return b.updatedAt - a.updatedAt;
+    });
+  }
 
   notesListEl.classList.toggle("manual-mode", sortMode === "manual");
   notesListEl.innerHTML = "";
@@ -1712,6 +1912,16 @@ searchInput.addEventListener("input", () => {
   }, 150);
 });
 
+const semanticSearchToggle = document.getElementById("semantic-search-toggle");
+setPressed(semanticSearchToggle, semanticSearchMode);
+semanticSearchToggle.addEventListener("click", () => {
+  semanticSearchMode = !semanticSearchMode;
+  savePref(SEMANTIC_SEARCH_PREF_KEY, semanticSearchMode);
+  setPressed(semanticSearchToggle, semanticSearchMode);
+  showToast(semanticSearchMode ? "Recherche par sens activée" : "Recherche par sens désactivée");
+  if (searchQuery.trim()) renderList();
+});
+
 // --- Saved searches: pin the current query + folder/tag filter combo as a
 // chip, instead of a whole new "smart folder" concept parallel to real ones ---
 const savedSearchChipsEl = document.getElementById("saved-search-chips");
@@ -1854,6 +2064,7 @@ function newNoteObject() {
   const now = Date.now();
   return {
     id: crypto.randomUUID(),
+    vaultId: activeVaultId,
     title: "",
     html: "",
     folder: "",
@@ -1875,6 +2086,7 @@ function newNoteObject() {
     properties: {},
     journalDate: null,
     lastOpenedAt: null,
+    lastSyncedAt: null,
     reminderAt: null,
     reminderRecur: null,
     expiresAt: null,
@@ -1884,6 +2096,7 @@ function newNoteObject() {
     paperStyle: "blank",
     archived: false,
     deletedAt: null,
+    ocrText: "",
   };
 }
 
@@ -2028,6 +2241,123 @@ duplicateNoteBtn.addEventListener("click", async () => {
   currentNote = copy;
   loadNoteIntoEditor();
   showToast("Note dupliquée");
+});
+
+// --- Templates: reusable note structures (meeting notes, a daily journal
+// page, a book-reading sheet…) — stored as plain {name, html} pairs in
+// localStorage, entirely separate from the notes themselves. ---
+const TEMPLATES_PREF_KEY = "noteflow.templates";
+
+function loadTemplates() {
+  return loadPref(TEMPLATES_PREF_KEY, []);
+}
+function saveTemplates(list) {
+  savePref(TEMPLATES_PREF_KEY, list);
+}
+
+document.getElementById("save-as-template-btn").addEventListener("click", async () => {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour l'enregistrer comme modèle");
+    return;
+  }
+  const name = window.prompt("Nom du modèle :", currentNote.title || "Modèle");
+  if (!name || !name.trim()) return;
+  await flushSave(true);
+  const templates = loadTemplates();
+  templates.push({ id: crypto.randomUUID(), name: name.trim(), html: currentNote.html || "" });
+  saveTemplates(templates);
+  showToast(`Modèle « ${name.trim()} » enregistré`);
+});
+
+function renderTemplatesPickerPanel() {
+  const templates = loadTemplates();
+  templatesListEl.innerHTML = "";
+  if (!templates.length) {
+    templatesListEl.innerHTML = '<li class="history-empty">Aucun modèle enregistré pour l\'instant.</li>';
+    return;
+  }
+  templates.forEach((tpl) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const span = document.createElement("span");
+    span.textContent = tpl.name;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Utiliser";
+    btn.addEventListener("click", async () => {
+      templatesPanel.classList.add("hidden");
+      const note = newNoteObject();
+      note.html = tpl.html;
+      notes.unshift(note);
+      await persistNote(note);
+      currentNote = note;
+      loadNoteIntoEditor();
+      showEditor();
+      titleInput.focus();
+    });
+    li.appendChild(span);
+    li.appendChild(btn);
+    templatesListEl.appendChild(li);
+  });
+}
+
+function renderManageTemplatesPanel() {
+  const templates = loadTemplates();
+  manageTemplatesListEl.innerHTML = "";
+  if (!templates.length) {
+    manageTemplatesListEl.innerHTML = '<li class="history-empty">Aucun modèle enregistré pour l\'instant.</li>';
+    return;
+  }
+  templates.forEach((tpl, index) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const span = document.createElement("span");
+    span.textContent = tpl.name;
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "link-btn";
+    renameBtn.textContent = "Renommer";
+    renameBtn.addEventListener("click", () => {
+      const newName = window.prompt("Nouveau nom :", tpl.name);
+      if (!newName || !newName.trim()) return;
+      const list = loadTemplates();
+      list[index].name = newName.trim();
+      saveTemplates(list);
+      renderManageTemplatesPanel();
+    });
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "link-btn danger";
+    deleteBtn.textContent = "Supprimer";
+    deleteBtn.addEventListener("click", () => {
+      const list = loadTemplates();
+      list.splice(index, 1);
+      saveTemplates(list);
+      renderManageTemplatesPanel();
+    });
+    li.appendChild(span);
+    li.appendChild(renameBtn);
+    li.appendChild(deleteBtn);
+    manageTemplatesListEl.appendChild(li);
+  });
+}
+
+const templatesBtn = document.getElementById("templates-btn");
+const templatesPanel = document.getElementById("templates-panel");
+const templatesListEl = document.getElementById("templates-list");
+const manageTemplatesBtn = document.getElementById("manage-templates-btn");
+const manageTemplatesPanel = document.getElementById("manage-templates-panel");
+const manageTemplatesListEl = document.getElementById("manage-templates-list");
+
+templatesBtn.addEventListener("click", () => {
+  const opening = templatesPanel.classList.contains("hidden");
+  templatesPanel.classList.toggle("hidden");
+  if (opening) renderTemplatesPickerPanel();
+});
+manageTemplatesBtn.addEventListener("click", () => {
+  const opening = manageTemplatesPanel.classList.contains("hidden");
+  manageTemplatesPanel.classList.toggle("hidden");
+  if (opening) renderManageTemplatesPanel();
 });
 
 // --- Reversible note splitting: one note per H2 heading, each linked back
@@ -2328,6 +2658,14 @@ function markdownToHtml(md) {
       .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
       .replace(/~~(.+?)~~/g, "<s>$1</s>")
       .replace(/(?:^|[^*])\*([^*]+?)\*(?!\*)/g, (m, g1) => m[0] + `<i>${g1}</i>`)
+      // Obsidian-style [[Page]] / [[Page|Alias]] wikilinks: left as a marker
+      // span here (bare text at this point, no target note known yet) —
+      // resolveImportedWikilinks() turns matching ones into real internal
+      // links once every file in the batch has been parsed.
+      .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (m, target, alias) => {
+        const label = (alias || target).trim();
+        return `<span class="wikilink-pending" data-wikilink-title="${target.trim()}">${label}</span>`;
+      })
       .replace(/\[([^\]]*)\]\(([^)]*)\)/g, '<a href="$2">$1</a>');
   }
   while (i < lines.length) {
@@ -2414,14 +2752,61 @@ function exportNoteAsMarkdown(note) {
   return front.join("\n") + htmlToMarkdown(note.html);
 }
 
-function importMarkdown(text) {
+// Notion's bulk export appends a 32-char hex block id to every filename
+// ("Meeting Notes 3f9a1c2b4d5e6f7a8b9c0d1e2f3a4b5c.md") — strip it so the
+// imported note's title matches what the user actually sees in Notion.
+function titleFromFilename(filename) {
+  return (filename || "")
+    .replace(/\.md$/i, "")
+    .replace(/\s+[0-9a-f]{32}$/i, "")
+    .trim();
+}
+
+function importMarkdown(text, filenameHint) {
   const { meta, body } = parseFrontMatter(text);
   const note = newNoteObject();
-  note.title = meta.title || "Note importée";
+  let title = meta.title;
+  if (!title) {
+    const h1 = body.match(/^#\s+(.+)$/m);
+    if (h1) title = h1[1].trim();
+  }
+  if (!title && filenameHint) title = titleFromFilename(filenameHint);
+  note.title = title || "Note importée";
   note.folder = meta.folder || "";
   note.tags = Array.isArray(meta.tags) ? meta.tags : meta.tags ? [meta.tags] : [];
   note.html = sanitizeNoteHtml(markdownToHtml(body));
   return note;
+}
+
+// Second pass over a whole imported batch: [[Page]] markers left by
+// markdownToHtml become real internal wikilinks when their target is found
+// either among the notes just imported or already in the active vault —
+// resolving against the batch first is what makes Obsidian/Notion exports
+// (which link to each other, not to anything already in NoteFlow) work.
+function resolveImportedWikilinks(importedNotes) {
+  const titleIndex = new Map();
+  [...notesInActiveVault(), ...importedNotes].forEach((n) => {
+    if (!n.deletedAt) titleIndex.set((n.title || "").toLowerCase(), n);
+  });
+  importedNotes.forEach((note) => {
+    if (!note.html.includes("wikilink-pending")) return;
+    const div = document.createElement("div");
+    div.innerHTML = note.html;
+    div.querySelectorAll(".wikilink-pending").forEach((span) => {
+      const target = titleIndex.get((span.dataset.wikilinkTitle || "").toLowerCase());
+      if (target) {
+        const a = document.createElement("a");
+        a.href = "#";
+        a.className = "wikilink";
+        a.dataset.noteId = target.id;
+        a.textContent = span.textContent;
+        span.replaceWith(a);
+      } else {
+        span.replaceWith(document.createTextNode(span.textContent));
+      }
+    });
+    note.html = sanitizeNoteHtml(div.innerHTML);
+  });
 }
 
 document.getElementById("export-note-btn").addEventListener("click", async () => {
@@ -3708,20 +4093,39 @@ function renderOutline() {
 }
 
 // --- Split view: a read-only reference pane showing a second note beside
-// the one being edited — mono-user, entirely local, for copying from or
-// checking a source while writing, without leaving the editor. Read-only on
-// purpose: two live contenteditable regions autosaving independently would
-// multiply every edge case (history snapshots, wikilink autocomplete, drawing
-// canvas sizing…) for a "peek at another note" feature that doesn't need it. ---
+// the one being edited — mono-user, entirely local, for consulting or
+// actually editing a source note side by side while writing the main one,
+// without leaving the editor. Its own independent autosave debounce (not
+// currentNote/textEditor's) keeps it fully decoupled from the main editor's
+// state — no shared history snapshots, wikilink autocomplete, or drawing
+// canvas, on purpose: those stay exclusive to the primary, full-featured
+// editor, this pane is deliberately a lighter-weight second view. ---
 const splitViewBtn = document.getElementById("split-view-btn");
 const splitViewPane = document.getElementById("split-view-pane");
 const splitViewSearch = document.getElementById("split-view-search");
 const splitViewResults = document.getElementById("split-view-results");
 const splitViewContent = document.getElementById("split-view-content");
+const splitViewEditToggle = document.getElementById("split-view-edit-toggle");
 let splitViewNoteId = null;
+let splitViewEditable = false;
+let splitViewSaveTimer = null;
+
+function flushSplitViewSave() {
+  clearTimeout(splitViewSaveTimer);
+  if (!splitViewEditable || !splitViewNoteId) return;
+  const note = notes.find((n) => n.id === splitViewNoteId);
+  if (!note) return;
+  const body = splitViewContent.querySelector(".split-view-editable");
+  if (!body) return;
+  note.html = sanitizeNoteHtml(body.innerHTML);
+  note.updatedAt = Date.now();
+  persistNote(note);
+  if (listScreen.classList.contains("active")) renderList();
+}
 
 function renderSplitViewContent() {
   const note = notes.find((n) => n.id === splitViewNoteId && !n.deletedAt);
+  splitViewEditToggle.classList.toggle("hidden", !note || note.locked);
   if (!note) {
     splitViewContent.innerHTML = '<p class="split-view-empty">Choisis une note ci-dessus.</p>';
     return;
@@ -3730,11 +4134,27 @@ function renderSplitViewContent() {
     splitViewContent.innerHTML = '<p class="split-view-empty">Cette note est verrouillée.</p>';
     return;
   }
-  splitViewContent.innerHTML = `<p><strong>${escapeHtml(note.title || "Sans titre")}</strong></p>` + (sanitizeNoteHtml(note.html) || "");
+  splitViewContent.innerHTML = `<p><strong>${escapeHtml(note.title || "Sans titre")}</strong></p><div class="split-view-editable"></div>`;
+  const body = splitViewContent.querySelector(".split-view-editable");
+  body.innerHTML = sanitizeNoteHtml(note.html) || "";
+  body.contentEditable = splitViewEditable ? "true" : "false";
+  body.addEventListener("input", () => {
+    clearTimeout(splitViewSaveTimer);
+    splitViewSaveTimer = setTimeout(flushSplitViewSave, 500);
+  });
+  splitViewEditToggle.textContent = splitViewEditable ? "Lecture seule" : "Modifier";
 }
 
+splitViewEditToggle.addEventListener("click", () => {
+  flushSplitViewSave();
+  splitViewEditable = !splitViewEditable;
+  renderSplitViewContent();
+});
+
 function openInSplitView(noteId) {
+  flushSplitViewSave();
   splitViewNoteId = noteId;
+  splitViewEditable = false;
   splitViewPane.classList.remove("hidden");
   splitViewResults.classList.add("hidden");
   splitViewSearch.value = "";
@@ -3763,6 +4183,7 @@ splitViewSearch.addEventListener("input", () => {
 });
 
 document.getElementById("split-view-close").addEventListener("click", () => {
+  flushSplitViewSave();
   splitViewPane.classList.add("hidden");
   splitViewNoteId = null;
 });
@@ -3774,6 +4195,7 @@ splitViewBtn.addEventListener("click", () => {
     renderSplitViewContent();
     setTimeout(() => splitViewSearch.focus(), 30);
   } else {
+    flushSplitViewSave();
     splitViewPane.classList.add("hidden");
   }
 });
@@ -3807,6 +4229,849 @@ function extractOutgoingRefs(html) {
   container.querySelectorAll(".transclusion[data-note-id]").forEach((d) => refs.push({ id: d.dataset.noteId, kind: "transclusion" }));
   return refs;
 }
+
+// --- Interactive graph view: notes as nodes, wikilinks/transclusions as
+// edges, laid out with a small hand-rolled force simulation (repulsion +
+// spring attraction + centering, run on canvas via requestAnimationFrame) —
+// no charting library, since the actual algorithm is short and this avoids
+// a CDN dependency for something this self-contained. ---
+const graphViewBtn = document.getElementById("graph-view-btn");
+const graphViewOverlay = document.getElementById("graph-view-overlay");
+const graphViewClose = document.getElementById("graph-view-close");
+const graphViewCount = document.getElementById("graph-view-count");
+const graphCanvas = document.getElementById("graph-canvas");
+const graphCtx = graphCanvas.getContext("2d");
+const graphTooltip = document.getElementById("graph-tooltip");
+
+let graphNodes = [];
+let graphEdges = [];
+let graphAnimFrame = null;
+let graphDragNode = null;
+let graphPan = { x: 0, y: 0 };
+let graphDraggingCanvas = false;
+let graphLastPointer = null;
+let graphHoverNode = null;
+
+function buildGraphData() {
+  const active = notesInActiveVault().filter((n) => !n.deletedAt && !n.locked);
+  const idSet = new Set(active.map((n) => n.id));
+  const degree = new Map();
+  const edges = [];
+  active.forEach((note) => {
+    extractOutgoingRefs(note.html).forEach((ref) => {
+      if (!idSet.has(ref.id) || ref.id === note.id) return;
+      edges.push({ from: note.id, to: ref.id });
+      degree.set(note.id, (degree.get(note.id) || 0) + 1);
+      degree.set(ref.id, (degree.get(ref.id) || 0) + 1);
+    });
+  });
+  const cx = graphCanvas.width / 2;
+  const cy = graphCanvas.height / 2;
+  const nodes = active.map((n, i) => {
+    const angle = (i / active.length) * Math.PI * 2;
+    const radius = 80 + Math.random() * 60;
+    return {
+      id: n.id,
+      title: n.title || "Sans titre",
+      x: cx + Math.cos(angle) * radius,
+      y: cy + Math.sin(angle) * radius,
+      vx: 0,
+      vy: 0,
+      degree: degree.get(n.id) || 0,
+    };
+  });
+  return { nodes, edges };
+}
+
+function graphStep() {
+  const nodes = graphNodes;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const cx = graphCanvas.width / 2;
+  const cy = graphCanvas.height / 2;
+  // Repulsion between every pair — O(n²), fine for the hundreds-of-notes
+  // scale a personal notebook actually reaches.
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i];
+      const b = nodes[j];
+      let dx = a.x - b.x;
+      let dy = a.y - b.y;
+      let distSq = dx * dx + dy * dy || 0.01;
+      const force = 2400 / distSq;
+      const dist = Math.sqrt(distSq);
+      dx /= dist;
+      dy /= dist;
+      a.vx += dx * force;
+      a.vy += dy * force;
+      b.vx -= dx * force;
+      b.vy -= dy * force;
+    }
+  }
+  // Spring attraction along edges.
+  graphEdges.forEach((e) => {
+    const a = byId.get(e.from);
+    const b = byId.get(e.to);
+    if (!a || !b) return;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    const targetDist = 140;
+    const force = (dist - targetDist) * 0.02;
+    const fx = (dx / dist) * force;
+    const fy = (dy / dist) * force;
+    a.vx += fx;
+    a.vy += fy;
+    b.vx -= fx;
+    b.vy -= fy;
+  });
+  // Gentle centering so the whole graph doesn't drift off-canvas.
+  nodes.forEach((n) => {
+    if (n === graphDragNode) return;
+    n.vx += (cx - n.x) * 0.0015;
+    n.vy += (cy - n.y) * 0.0015;
+    n.vx *= 0.82;
+    n.vy *= 0.82;
+    n.x += n.vx;
+    n.y += n.vy;
+  });
+}
+
+function drawGraph() {
+  const dpr = window.devicePixelRatio || 1;
+  graphCtx.save();
+  graphCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  graphCtx.clearRect(0, 0, graphCanvas.width / dpr, graphCanvas.height / dpr);
+  graphCtx.translate(graphPan.x, graphPan.y);
+  const byId = new Map(graphNodes.map((n) => [n.id, n]));
+  const rootStyle = getComputedStyle(document.documentElement);
+  const borderColor = rootStyle.getPropertyValue("--border").trim() || "rgba(0,0,0,0.1)";
+  const goldColor = rootStyle.getPropertyValue("--gold").trim() || "#c8963c";
+  const textColor = rootStyle.getPropertyValue("--text").trim() || "#111";
+
+  graphCtx.strokeStyle = borderColor;
+  graphCtx.lineWidth = 1;
+  graphEdges.forEach((e) => {
+    const a = byId.get(e.from);
+    const b = byId.get(e.to);
+    if (!a || !b) return;
+    graphCtx.beginPath();
+    graphCtx.moveTo(a.x, a.y);
+    graphCtx.lineTo(b.x, b.y);
+    graphCtx.stroke();
+  });
+
+  graphNodes.forEach((n) => {
+    const r = 5 + Math.min(n.degree, 8) * 1.5;
+    graphCtx.beginPath();
+    graphCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    graphCtx.fillStyle = goldColor;
+    graphCtx.globalAlpha = n === graphHoverNode ? 1 : 0.7;
+    graphCtx.fill();
+    graphCtx.globalAlpha = 1;
+    graphCtx.fillStyle = textColor;
+    graphCtx.font = "11px sans-serif";
+    graphCtx.fillText(n.title.slice(0, 24), n.x + r + 4, n.y + 4);
+  });
+  graphCtx.restore();
+}
+
+function graphLoop() {
+  graphStep();
+  drawGraph();
+  graphAnimFrame = requestAnimationFrame(graphLoop);
+}
+
+function resizeGraphCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = graphCanvas.getBoundingClientRect();
+  graphCanvas.width = rect.width * dpr;
+  graphCanvas.height = rect.height * dpr;
+}
+
+function graphPointFromEvent(e) {
+  const rect = graphCanvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left - graphPan.x, y: e.clientY - rect.top - graphPan.y };
+}
+
+function findGraphNodeAt(pt) {
+  return graphNodes.find((n) => {
+    const r = 5 + Math.min(n.degree, 8) * 1.5 + 4;
+    return (n.x - pt.x) ** 2 + (n.y - pt.y) ** 2 <= r * r;
+  });
+}
+
+graphCanvas.addEventListener("pointerdown", (e) => {
+  const pt = graphPointFromEvent(e);
+  const node = findGraphNodeAt(pt);
+  if (node) {
+    graphDragNode = node;
+    graphCanvas.setPointerCapture(e.pointerId);
+  } else {
+    graphDraggingCanvas = true;
+    graphLastPointer = { x: e.clientX, y: e.clientY };
+  }
+});
+graphCanvas.addEventListener("pointermove", (e) => {
+  if (graphDragNode) {
+    const pt = graphPointFromEvent(e);
+    graphDragNode.x = pt.x;
+    graphDragNode.y = pt.y;
+    graphDragNode.vx = 0;
+    graphDragNode.vy = 0;
+  } else if (graphDraggingCanvas && graphLastPointer) {
+    graphPan.x += e.clientX - graphLastPointer.x;
+    graphPan.y += e.clientY - graphLastPointer.y;
+    graphLastPointer = { x: e.clientX, y: e.clientY };
+  } else {
+    const pt = graphPointFromEvent(e);
+    graphHoverNode = findGraphNodeAt(pt) || null;
+    if (graphHoverNode) {
+      graphTooltip.textContent = graphHoverNode.title;
+      graphTooltip.style.left = `${e.clientX + 12}px`;
+      graphTooltip.style.top = `${e.clientY + 12}px`;
+      graphTooltip.classList.remove("hidden");
+    } else {
+      graphTooltip.classList.add("hidden");
+    }
+  }
+});
+graphCanvas.addEventListener("pointerup", (e) => {
+  if (graphDragNode && !graphDraggingCanvas) {
+    const pt = graphPointFromEvent(e);
+    const moved = findGraphNodeAt(pt) === graphDragNode;
+    // A drag that never really moved the pointer counts as a click.
+    if (moved && Math.abs(graphDragNode.vx) < 0.01) {
+      /* click-through handled by dedicated click listener below */
+    }
+  }
+  graphDragNode = null;
+  graphDraggingCanvas = false;
+});
+graphCanvas.addEventListener("click", (e) => {
+  const pt = graphPointFromEvent(e);
+  const node = findGraphNodeAt(pt);
+  if (node) {
+    closeGraphView();
+    goToNote(node.id);
+  }
+});
+
+function openGraphView() {
+  graphViewOverlay.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    resizeGraphCanvas();
+    graphPan = { x: 0, y: 0 };
+    const data = buildGraphData();
+    graphNodes = data.nodes;
+    graphEdges = data.edges;
+    graphViewCount.textContent = `${graphNodes.length} note${graphNodes.length > 1 ? "s" : ""} · ${graphEdges.length} lien${graphEdges.length > 1 ? "s" : ""}`;
+    if (graphAnimFrame) cancelAnimationFrame(graphAnimFrame);
+    graphLoop();
+  });
+}
+
+function closeGraphView() {
+  graphViewOverlay.classList.add("hidden");
+  if (graphAnimFrame) cancelAnimationFrame(graphAnimFrame);
+  graphAnimFrame = null;
+}
+
+graphViewBtn.addEventListener("click", () => {
+  showList();
+  openGraphView();
+});
+graphViewClose.addEventListener("click", closeGraphView);
+window.addEventListener("resize", () => {
+  if (!graphViewOverlay.classList.contains("hidden")) resizeGraphCanvas();
+});
+
+// --- Automatic mindmap: a static, read-only tree built purely from a
+// note's own H1/H2/H3 headings (no manual layout, no dragging notes around
+// like the graph view — this one just answers "what's the outline of this
+// long note, at a glance"). ---
+const mindmapViewOverlay = document.getElementById("mindmap-view-overlay");
+const mindmapViewClose = document.getElementById("mindmap-view-close");
+const mindmapViewTitle = document.getElementById("mindmap-view-title");
+const mindmapViewBtn = document.getElementById("mindmap-view-btn");
+const mindmapCanvas = document.getElementById("mindmap-canvas");
+const mindmapCtx = mindmapCanvas.getContext("2d");
+let mindmapNodes = [];
+let mindmapEdges = [];
+let mindmapPan = { x: 0, y: 0 };
+let mindmapDraggingCanvas = false;
+let mindmapLastPointer = null;
+
+function parseHeadingsTree(html) {
+  const div = document.createElement("div");
+  div.innerHTML = html || "";
+  const root = { level: 0, text: "", children: [] };
+  const stack = [root];
+  Array.from(div.children).forEach((el) => {
+    const m = /^H([1-3])$/.exec(el.tagName);
+    if (!m) return;
+    const level = Number(m[1]);
+    const node = { level, text: el.textContent.trim() || "Sans titre", children: [] };
+    while (stack.length > 1 && stack[stack.length - 1].level >= level) stack.pop();
+    stack[stack.length - 1].children.push(node);
+    stack.push(node);
+  });
+  return root;
+}
+
+const MINDMAP_H_GAP = 190;
+const MINDMAP_V_GAP = 46;
+
+function layoutMindmapTree(root) {
+  let yCounter = 0;
+  const nodes = [];
+  const edges = [];
+  function visit(node, depth, parent) {
+    if (!node.children.length) {
+      node.y = yCounter++ * MINDMAP_V_GAP;
+    } else {
+      node.children.forEach((c) => visit(c, depth + 1, node));
+      const ys = node.children.map((c) => c.y);
+      node.y = (Math.min(...ys) + Math.max(...ys)) / 2;
+    }
+    node.x = depth * MINDMAP_H_GAP;
+    nodes.push(node);
+    if (parent) edges.push({ from: parent, to: node });
+  }
+  root.children.forEach((c) => visit(c, 0, null));
+  return { nodes, edges };
+}
+
+function drawMindmap() {
+  const dpr = window.devicePixelRatio || 1;
+  mindmapCtx.save();
+  mindmapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  mindmapCtx.clearRect(0, 0, mindmapCanvas.width / dpr, mindmapCanvas.height / dpr);
+  mindmapCtx.translate(mindmapPan.x, mindmapPan.y);
+  const rootStyle = getComputedStyle(document.documentElement);
+  const borderColor = rootStyle.getPropertyValue("--border").trim() || "rgba(0,0,0,0.1)";
+  const goldColor = rootStyle.getPropertyValue("--gold").trim() || "#c8963c";
+  const textColor = rootStyle.getPropertyValue("--text").trim() || "#111";
+
+  mindmapCtx.strokeStyle = borderColor;
+  mindmapCtx.lineWidth = 1.5;
+  mindmapEdges.forEach((e) => {
+    mindmapCtx.beginPath();
+    mindmapCtx.moveTo(e.from.x + 6, e.from.y);
+    const midX = (e.from.x + e.to.x) / 2;
+    mindmapCtx.bezierCurveTo(midX, e.from.y, midX, e.to.y, e.to.x - 6, e.to.y);
+    mindmapCtx.stroke();
+  });
+
+  mindmapNodes.forEach((n) => {
+    const r = n.level === 1 ? 6 : n.level === 2 ? 4.5 : 3.5;
+    mindmapCtx.beginPath();
+    mindmapCtx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    mindmapCtx.fillStyle = goldColor;
+    mindmapCtx.fill();
+    mindmapCtx.fillStyle = textColor;
+    mindmapCtx.font = n.level === 1 ? "bold 13px sans-serif" : "12px sans-serif";
+    mindmapCtx.fillText(n.text.slice(0, 30), n.x + r + 6, n.y + 4);
+  });
+  mindmapCtx.restore();
+}
+
+function resizeMindmapCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = mindmapCanvas.getBoundingClientRect();
+  mindmapCanvas.width = rect.width * dpr;
+  mindmapCanvas.height = rect.height * dpr;
+}
+
+mindmapCanvas.addEventListener("pointerdown", (e) => {
+  mindmapDraggingCanvas = true;
+  mindmapLastPointer = { x: e.clientX, y: e.clientY };
+  mindmapCanvas.setPointerCapture(e.pointerId);
+});
+mindmapCanvas.addEventListener("pointermove", (e) => {
+  if (!mindmapDraggingCanvas || !mindmapLastPointer) return;
+  mindmapPan.x += e.clientX - mindmapLastPointer.x;
+  mindmapPan.y += e.clientY - mindmapLastPointer.y;
+  mindmapLastPointer = { x: e.clientX, y: e.clientY };
+  drawMindmap();
+});
+mindmapCanvas.addEventListener("pointerup", () => {
+  mindmapDraggingCanvas = false;
+  mindmapLastPointer = null;
+});
+
+function openMindmapView() {
+  if (currentNote.locked) {
+    showToast("Déverrouille d'abord la note pour voir sa carte mentale");
+    return;
+  }
+  const tree = parseHeadingsTree(currentNote.html);
+  if (!tree.children.length) {
+    showToast("Aucun titre (H1/H2/H3) dans cette note");
+    return;
+  }
+  const { nodes, edges } = layoutMindmapTree(tree);
+  mindmapNodes = nodes;
+  mindmapEdges = edges;
+  mindmapViewTitle.textContent = currentNote.title || "Sans titre";
+  mindmapViewOverlay.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    resizeMindmapCanvas();
+    const minY = Math.min(...nodes.map((n) => n.y));
+    const maxY = Math.max(...nodes.map((n) => n.y));
+    const rect = mindmapCanvas.getBoundingClientRect();
+    mindmapPan = { x: 30, y: rect.height / 2 - (minY + maxY) / 2 };
+    drawMindmap();
+  });
+}
+
+function closeMindmapView() {
+  mindmapViewOverlay.classList.add("hidden");
+}
+
+mindmapViewBtn.addEventListener("click", () => {
+  openMindmapView();
+});
+mindmapViewClose.addEventListener("click", closeMindmapView);
+window.addEventListener("resize", () => {
+  if (!mindmapViewOverlay.classList.contains("hidden")) {
+    resizeMindmapCanvas();
+    drawMindmap();
+  }
+});
+
+// --- Infinite whiteboard: freeform text cards + freehand drawing sharing
+// one coordinate space, entirely separate from the note editor and from
+// any single note — its own per-vault canvas for spatial thinking rather
+// than linear note-taking. A large fixed "world" panned via a CSS
+// transform stands in for a truly unbounded canvas: simpler and plenty
+// for sketching out ideas without the complexity (and risk) of a
+// dynamically resizing coordinate space. ---
+const WHITEBOARD_WORLD = { w: 3000, h: 2000 };
+const whiteboardOverlay = document.getElementById("whiteboard-overlay");
+const whiteboardClose = document.getElementById("whiteboard-close");
+const whiteboardWorldWrap = document.getElementById("whiteboard-world-wrap");
+const whiteboardWorld = document.getElementById("whiteboard-world");
+const whiteboardCanvas = document.getElementById("whiteboard-canvas");
+const whiteboardCtx = whiteboardCanvas.getContext("2d");
+const whiteboardCardsEl = document.getElementById("whiteboard-cards");
+const whiteboardBtn = document.getElementById("whiteboard-btn");
+const whiteboardMoveBtn = document.getElementById("whiteboard-move-btn");
+const whiteboardPenBtn = document.getElementById("whiteboard-pen-btn");
+const whiteboardAddCardBtn = document.getElementById("whiteboard-add-card-btn");
+const whiteboardUndoBtn = document.getElementById("whiteboard-undo-btn");
+
+let whiteboardMode = "move"; // "move" | "pen"
+let whiteboardPan = { x: 0, y: 0 };
+let whiteboardData = { cards: [], strokes: [] };
+let whiteboardActiveStroke = null;
+let whiteboardPanning = false;
+let whiteboardLastPointer = null;
+let whiteboardDragState = null;
+
+function whiteboardKey() {
+  return "noteflow.whiteboard." + activeVaultId;
+}
+function loadWhiteboard() {
+  const data = loadPref(whiteboardKey(), { cards: [], strokes: [] });
+  if (!Array.isArray(data.cards)) data.cards = [];
+  if (!Array.isArray(data.strokes)) data.strokes = [];
+  return data;
+}
+function saveWhiteboard() {
+  savePref(whiteboardKey(), whiteboardData);
+}
+
+function applyWhiteboardTransform() {
+  whiteboardWorld.style.transform = `translate(${whiteboardPan.x}px, ${whiteboardPan.y}px)`;
+}
+
+function resizeWhiteboardCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  whiteboardCanvas.width = WHITEBOARD_WORLD.w * dpr;
+  whiteboardCanvas.height = WHITEBOARD_WORLD.h * dpr;
+  whiteboardCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawWhiteboardStroke(stroke) {
+  if (stroke.points.length < 2) return;
+  whiteboardCtx.strokeStyle = stroke.color;
+  whiteboardCtx.lineWidth = stroke.width;
+  whiteboardCtx.lineJoin = "round";
+  whiteboardCtx.lineCap = "round";
+  whiteboardCtx.beginPath();
+  stroke.points.forEach((p, i) => {
+    if (i === 0) whiteboardCtx.moveTo(p.x, p.y);
+    else whiteboardCtx.lineTo(p.x, p.y);
+  });
+  whiteboardCtx.stroke();
+}
+
+function drawWhiteboardStrokes() {
+  whiteboardCtx.clearRect(0, 0, WHITEBOARD_WORLD.w, WHITEBOARD_WORLD.h);
+  whiteboardData.strokes.forEach(drawWhiteboardStroke);
+}
+
+function whiteboardPointFromEvent(e) {
+  const rect = whiteboardCanvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function renderWhiteboardCard(card) {
+  const el = document.createElement("div");
+  el.className = "whiteboard-card";
+  el.style.left = card.x + "px";
+  el.style.top = card.y + "px";
+  el.dataset.id = card.id;
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "whiteboard-card-delete";
+  del.textContent = "×";
+  del.title = "Supprimer cette carte";
+  del.addEventListener("mousedown", (e) => e.preventDefault());
+  del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    whiteboardData.cards = whiteboardData.cards.filter((c) => c.id !== card.id);
+    saveWhiteboard();
+    el.remove();
+  });
+  el.appendChild(del);
+
+  // Kept as a separate contentEditable node from the card itself — the
+  // delete button lives outside it, so its "×" never leaks into
+  // el.textContent the way it would if the whole card were editable.
+  const text = document.createElement("div");
+  text.className = "whiteboard-card-text";
+  text.contentEditable = "true";
+  text.textContent = card.text || "";
+  text.addEventListener("input", () => {
+    card.text = text.textContent;
+    saveWhiteboard();
+  });
+  el.appendChild(text);
+
+  el.addEventListener("pointerdown", (e) => {
+    if (e.target === del) return;
+    whiteboardDragState = { card, el, startX: e.clientX, startY: e.clientY, cardX: card.x, cardY: card.y, dragging: false };
+  });
+  whiteboardCardsEl.appendChild(el);
+  return el;
+}
+
+whiteboardCardsEl.addEventListener("pointermove", (e) => {
+  if (!whiteboardDragState) return;
+  const { card, el, startX, startY, cardX, cardY } = whiteboardDragState;
+  const dx = e.clientX - startX;
+  const dy = e.clientY - startY;
+  if (!whiteboardDragState.dragging && Math.hypot(dx, dy) < 4) return;
+  whiteboardDragState.dragging = true;
+  card.x = cardX + dx;
+  card.y = cardY + dy;
+  el.style.left = card.x + "px";
+  el.style.top = card.y + "px";
+});
+document.addEventListener("pointerup", () => {
+  if (whiteboardDragState && whiteboardDragState.dragging) saveWhiteboard();
+  whiteboardDragState = null;
+});
+
+function setWhiteboardMode(mode) {
+  whiteboardMode = mode;
+  setPressed(whiteboardMoveBtn, mode === "move");
+  setPressed(whiteboardPenBtn, mode === "pen");
+  whiteboardWorldWrap.classList.toggle("drawing", mode === "pen");
+}
+whiteboardMoveBtn.addEventListener("click", () => setWhiteboardMode("move"));
+whiteboardPenBtn.addEventListener("click", () => setWhiteboardMode("pen"));
+
+whiteboardCanvas.addEventListener("pointerdown", (e) => {
+  if (whiteboardMode === "pen") {
+    const rootStyle = getComputedStyle(document.documentElement);
+    const color = rootStyle.getPropertyValue("--text").trim() || "#1d1d1f";
+    whiteboardActiveStroke = { points: [whiteboardPointFromEvent(e)], color, width: 3 };
+    whiteboardData.strokes.push(whiteboardActiveStroke);
+  } else {
+    whiteboardPanning = true;
+    whiteboardLastPointer = { x: e.clientX, y: e.clientY };
+    whiteboardWorldWrap.classList.add("panning");
+  }
+  whiteboardCanvas.setPointerCapture(e.pointerId);
+});
+whiteboardCanvas.addEventListener("pointermove", (e) => {
+  if (whiteboardMode === "pen" && whiteboardActiveStroke) {
+    whiteboardActiveStroke.points.push(whiteboardPointFromEvent(e));
+    drawWhiteboardStroke(whiteboardActiveStroke);
+  } else if (whiteboardPanning && whiteboardLastPointer) {
+    whiteboardPan.x += e.clientX - whiteboardLastPointer.x;
+    whiteboardPan.y += e.clientY - whiteboardLastPointer.y;
+    whiteboardLastPointer = { x: e.clientX, y: e.clientY };
+    applyWhiteboardTransform();
+  }
+});
+function endWhiteboardInteraction() {
+  if (whiteboardActiveStroke) {
+    whiteboardActiveStroke = null;
+    saveWhiteboard();
+  }
+  whiteboardPanning = false;
+  whiteboardLastPointer = null;
+  whiteboardWorldWrap.classList.remove("panning");
+}
+whiteboardCanvas.addEventListener("pointerup", endWhiteboardInteraction);
+whiteboardCanvas.addEventListener("pointercancel", endWhiteboardInteraction);
+
+whiteboardUndoBtn.addEventListener("click", () => {
+  if (!whiteboardData.strokes.length) return;
+  whiteboardData.strokes.pop();
+  drawWhiteboardStrokes();
+  saveWhiteboard();
+});
+
+whiteboardAddCardBtn.addEventListener("click", () => {
+  const rect = whiteboardWorldWrap.getBoundingClientRect();
+  const card = {
+    id: crypto.randomUUID(),
+    x: -whiteboardPan.x + rect.width / 2 - 100,
+    y: -whiteboardPan.y + rect.height / 2 - 50,
+    text: "",
+  };
+  whiteboardData.cards.push(card);
+  saveWhiteboard();
+  const el = renderWhiteboardCard(card);
+  el.querySelector(".whiteboard-card-text").focus();
+});
+
+function openWhiteboard() {
+  whiteboardData = loadWhiteboard();
+  whiteboardPan = { x: 0, y: 0 };
+  applyWhiteboardTransform();
+  setWhiteboardMode("move");
+  whiteboardOverlay.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    resizeWhiteboardCanvas();
+    drawWhiteboardStrokes();
+    whiteboardCardsEl.innerHTML = "";
+    whiteboardData.cards.forEach(renderWhiteboardCard);
+  });
+}
+function closeWhiteboard() {
+  whiteboardOverlay.classList.add("hidden");
+}
+whiteboardBtn.addEventListener("click", () => {
+  showList();
+  openWhiteboard();
+});
+whiteboardClose.addEventListener("click", closeWhiteboard);
+
+// --- Centralized tasks view: every checklist item across every note,
+// grouped by note, editable in place (toggling here writes straight back
+// into that note's stored html — no need to open the note itself). ---
+const tasksViewBtn = document.getElementById("tasks-view-btn");
+const tasksViewOverlay = document.getElementById("tasks-view-overlay");
+const tasksViewClose = document.getElementById("tasks-view-close");
+const tasksViewCount = document.getElementById("tasks-view-count");
+const tasksViewListEl = document.getElementById("tasks-view-list");
+const tasksHideDoneBtn = document.getElementById("tasks-hide-done-btn");
+let tasksHideDone = loadPref("noteflow.tasks.hideDone", false);
+
+function collectAllTasks() {
+  const tasks = [];
+  notesInActiveVault()
+    .filter((n) => !n.deletedAt && !n.archivedAt && !n.locked)
+    .forEach((note) => {
+      const div = document.createElement("div");
+      div.innerHTML = note.html || "";
+      const items = div.querySelectorAll(".checklist-item");
+      items.forEach((li, index) => {
+        const cb = li.querySelector("input[type=checkbox]");
+        if (!cb) return;
+        const span = li.querySelector("span");
+        tasks.push({
+          noteId: note.id,
+          noteTitle: note.title || "Sans titre",
+          itemIndex: index,
+          checked: cb.hasAttribute("checked"),
+          text: span ? span.textContent : "",
+        });
+      });
+    });
+  return tasks;
+}
+
+function toggleTaskInNote(noteId, itemIndex) {
+  const note = notes.find((n) => n.id === noteId && !n.deletedAt);
+  if (!note) return;
+  const div = document.createElement("div");
+  div.innerHTML = note.html || "";
+  const li = div.querySelectorAll(".checklist-item")[itemIndex];
+  const cb = li && li.querySelector("input[type=checkbox]");
+  if (!cb) return;
+  if (cb.hasAttribute("checked")) cb.removeAttribute("checked");
+  else cb.setAttribute("checked", "");
+  note.html = div.innerHTML;
+  note.updatedAt = Date.now();
+  persistNote(note);
+  if (currentNote && currentNote.id === noteId) {
+    textEditor.innerHTML = sanitizeNoteHtml(note.html);
+  }
+}
+
+function renderTasksView() {
+  const all = collectAllTasks();
+  const visible = tasksHideDone ? all.filter((t) => !t.checked) : all;
+  const doneCount = all.filter((t) => t.checked).length;
+  tasksViewCount.textContent = `${all.length - doneCount}/${all.length} tâche${all.length > 1 ? "s" : ""} restante${all.length - doneCount > 1 ? "s" : ""}`;
+  tasksViewListEl.innerHTML = "";
+  if (!visible.length) {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    li.textContent = all.length ? "Toutes les tâches sont cochées." : "Aucune tâche dans le carnet.";
+    tasksViewListEl.appendChild(li);
+    return;
+  }
+  const byNote = new Map();
+  visible.forEach((t) => {
+    if (!byNote.has(t.noteId)) byNote.set(t.noteId, []);
+    byNote.get(t.noteId).push(t);
+  });
+  byNote.forEach((items, noteId) => {
+    const header = document.createElement("li");
+    header.className = "history-item tasks-note-header";
+    const noteBtn = document.createElement("button");
+    noteBtn.type = "button";
+    noteBtn.className = "link-btn";
+    noteBtn.textContent = items[0].noteTitle;
+    noteBtn.addEventListener("click", () => {
+      tasksViewOverlay.classList.add("hidden");
+      goToNote(noteId);
+    });
+    header.appendChild(noteBtn);
+    tasksViewListEl.appendChild(header);
+    items.forEach((t) => {
+      const li = document.createElement("li");
+      li.className = "history-item task-view-item";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = t.checked;
+      cb.addEventListener("change", () => {
+        toggleTaskInNote(t.noteId, t.itemIndex);
+        renderTasksView();
+      });
+      const label = document.createElement("span");
+      label.textContent = t.text;
+      label.className = t.checked ? "task-view-text task-view-done" : "task-view-text";
+      li.appendChild(cb);
+      li.appendChild(label);
+      tasksViewListEl.appendChild(li);
+    });
+  });
+}
+
+tasksViewBtn.addEventListener("click", () => {
+  showList();
+  tasksViewOverlay.classList.remove("hidden");
+  renderTasksView();
+});
+tasksViewClose.addEventListener("click", () => tasksViewOverlay.classList.add("hidden"));
+tasksHideDoneBtn.addEventListener("click", () => {
+  tasksHideDone = !tasksHideDone;
+  savePref("noteflow.tasks.hideDone", tasksHideDone);
+  setPressed(tasksHideDoneBtn, tasksHideDone);
+  renderTasksView();
+});
+
+// --- Vaults panel: switch/create/rename/delete workspaces. ---
+const vaultsBtn = document.getElementById("vaults-btn");
+const vaultsBtnCurrent = document.getElementById("vaults-btn-current");
+const vaultsPanel = document.getElementById("vaults-panel");
+const vaultsListEl = document.getElementById("vaults-list");
+const vaultCreateBtn = document.getElementById("vault-create-btn");
+
+function updateVaultsBtnLabel() {
+  const current = vaults.find((v) => v.id === activeVaultId);
+  vaultsBtnCurrent.textContent = current ? current.name : "";
+}
+
+function renderVaultsPanel() {
+  vaultsListEl.innerHTML = "";
+  vaults.forEach((vault) => {
+    const li = document.createElement("li");
+    li.className = "history-item history-row";
+    const label = document.createElement("span");
+    label.textContent = (vault.id === activeVaultId ? "✓ " : "") + vault.name;
+    const actions = document.createElement("div");
+    const switchBtn = document.createElement("button");
+    switchBtn.type = "button";
+    switchBtn.className = "link-btn";
+    switchBtn.textContent = "Ouvrir";
+    switchBtn.disabled = vault.id === activeVaultId;
+    switchBtn.addEventListener("click", () => {
+      setActiveVault(vault.id);
+      updateVaultsBtnLabel();
+      renderVaultsPanel();
+      showToast(`Espace « ${vault.name} » ouvert`);
+    });
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "link-btn";
+    renameBtn.textContent = "Renommer";
+    renameBtn.addEventListener("click", () => {
+      const name = window.prompt("Nouveau nom :", vault.name);
+      if (!name || !name.trim()) return;
+      vault.name = name.trim();
+      saveVaults(vaults);
+      updateVaultsBtnLabel();
+      renderVaultsPanel();
+    });
+    actions.appendChild(switchBtn);
+    actions.appendChild(renameBtn);
+    if (vaults.length > 1) {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "link-btn danger";
+      deleteBtn.textContent = "Supprimer";
+      deleteBtn.addEventListener("click", () => {
+        const fallback = vaults.find((v) => v.id !== vault.id);
+        if (!window.confirm(`Supprimer l'espace « ${vault.name} » ? Ses notes seront déplacées vers « ${fallback.name} ».`)) return;
+        notes.forEach((n) => {
+          if ((n.vaultId || DEFAULT_VAULT_ID) === vault.id) {
+            n.vaultId = fallback.id;
+            persistNote(n);
+          }
+        });
+        vaults = vaults.filter((v) => v.id !== vault.id);
+        saveVaults(vaults);
+        if (activeVaultId === vault.id) setActiveVault(fallback.id);
+        else renderList();
+        updateVaultsBtnLabel();
+        renderVaultsPanel();
+        showToast(`Espace « ${vault.name} » supprimé`);
+      });
+      actions.appendChild(deleteBtn);
+    }
+    li.appendChild(label);
+    li.appendChild(actions);
+    vaultsListEl.appendChild(li);
+  });
+}
+
+vaultsBtn.addEventListener("click", () => {
+  const opening = vaultsPanel.classList.contains("hidden");
+  vaultsPanel.classList.toggle("hidden");
+  if (opening) renderVaultsPanel();
+});
+vaultCreateBtn.addEventListener("click", () => {
+  const name = window.prompt("Nom du nouvel espace de travail :", "");
+  if (!name || !name.trim()) return;
+  const vault = { id: crypto.randomUUID(), name: name.trim() };
+  vaults.push(vault);
+  saveVaults(vaults);
+  setActiveVault(vault.id);
+  updateVaultsBtnLabel();
+  renderVaultsPanel();
+  showToast(`Espace « ${vault.name} » créé`);
+});
+updateVaultsBtnLabel();
 
 function addBacklinksSection(title, entries, emptyText) {
   const header = document.createElement("li");
@@ -4088,6 +5353,86 @@ function insertWikilinkAt(node, start, end, target) {
   scheduleSave();
 }
 
+// --- Smart link suggestions: no need to type [[ at all — finishing a word
+// run that happens to match an existing note's title pops a small "Lier
+// vers « X » ?" chip near the caret, one click away from a real wikilink. ---
+const linkSuggestionEl = document.getElementById("link-suggestion-popup");
+const linkSuggestionTextEl = linkSuggestionEl.querySelector(".link-suggestion-text");
+let linkSuggestionState = null;
+let dismissedLinkSuggestionTitle = null;
+
+function hideLinkSuggestion() {
+  linkSuggestionEl.classList.add("hidden");
+  linkSuggestionState = null;
+}
+
+function showLinkSuggestion(node, start, end, note, title) {
+  linkSuggestionState = { node, start, end, target: note };
+  linkSuggestionTextEl.textContent = `Lier vers « ${title} » ?`;
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  const rect = range.getBoundingClientRect();
+  const pageRect = notePage.getBoundingClientRect();
+  linkSuggestionEl.style.left = `${rect.left - pageRect.left}px`;
+  linkSuggestionEl.style.top = `${rect.bottom - pageRect.top + 4}px`;
+  linkSuggestionEl.classList.remove("hidden");
+}
+
+textEditor.addEventListener("input", () => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) {
+    hideLinkSuggestion();
+    return;
+  }
+  const node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType !== 3) {
+    hideLinkSuggestion();
+    return;
+  }
+  const offset = sel.getRangeAt(0).startOffset;
+  const text = node.textContent.slice(0, offset);
+  // The [[ / ![[ typed-link flows already have their own UX — don't pile a
+  // second suggestion popup on top while one of those is in progress.
+  if (/!?\[\[[^[\]]*$/.test(text)) {
+    hideLinkSuggestion();
+    return;
+  }
+  const tail = text.slice(-80);
+  let best = null;
+  notesInActiveVault().forEach((n) => {
+    if (n.deletedAt || n.id === currentNote.id) return;
+    const title = (n.title || "").trim();
+    if (title.length < 4) return;
+    const idx = tail.toLowerCase().lastIndexOf(title.toLowerCase());
+    if (idx === -1 || idx + title.length !== tail.length) return;
+    const before = tail[idx - 1];
+    if (before !== undefined && /[a-z0-9à-ÿ]/i.test(before)) return;
+    if (!best || title.length > best.title.length) best = { note: n, title };
+  });
+  if (!best) {
+    hideLinkSuggestion();
+    dismissedLinkSuggestionTitle = null;
+    return;
+  }
+  if (dismissedLinkSuggestionTitle === best.title) return;
+  showLinkSuggestion(node, offset - best.title.length, offset, best.note, best.title);
+});
+
+document.getElementById("link-suggestion-accept").addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  if (!linkSuggestionState) return;
+  const { node, start, end, target } = linkSuggestionState;
+  insertWikilinkAt(node, start, end, target);
+  hideLinkSuggestion();
+});
+document.getElementById("link-suggestion-dismiss").addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  if (linkSuggestionState) dismissedLinkSuggestionTitle = linkSuggestionTextEl.textContent.replace(/^Lier vers « | » \?$/g, "");
+  hideLinkSuggestion();
+});
+textEditor.addEventListener("blur", () => setTimeout(hideLinkSuggestion, 150));
+
 async function chooseWikilinkAutocomplete(index) {
   if (!wikilinkAcRange || !wikilinkAcItems[index]) return;
   const { node, start, end } = wikilinkAcRange;
@@ -4105,7 +5450,7 @@ async function chooseWikilinkAutocomplete(index) {
 
 function renderWikilinkAutocomplete(node, start, query) {
   const q = query.trim().toLowerCase();
-  const matches = notes
+  const matches = notesInActiveVault()
     .filter((n) => !n.deletedAt && n.id !== currentNote.id)
     .filter((n) => !q || (n.title || "").toLowerCase().includes(q))
     .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -4156,8 +5501,8 @@ textEditor.addEventListener("input", () => {
     const query = closedMatch[1].trim().toLowerCase();
     if (!query) return;
     const target =
-      notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
-      notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+      notesInActiveVault().find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+      notesInActiveVault().find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
     if (!target) return;
     insertWikilinkAt(node, offset - closedMatch[0].length, offset, target);
     return;
@@ -4199,26 +5544,99 @@ textEditor.addEventListener("click", (e) => {
   if (notes.some((n) => n.id === id)) goToNote(id);
 });
 
+// --- Hover preview: see a linked note's content without leaving the one
+// you're reading, mouse only (a touch device has no hover state, so tapping
+// still just navigates via the click handler above). ---
+const wikilinkHoverPreviewEl = document.getElementById("wikilink-hover-preview");
+let wikilinkHoverTimer = null;
+let wikilinkHoverHideTimer = null;
+
+function showWikilinkHoverPreview(link) {
+  const id = link.dataset.noteId;
+  const note = notes.find((n) => n.id === id && !n.deletedAt);
+  if (!note) return;
+  wikilinkHoverPreviewEl.innerHTML = note.locked
+    ? '<p class="split-view-empty">Note verrouillée.</p>'
+    : `<p><strong>${escapeHtml(note.title || "Sans titre")}</strong></p>` + (sanitizeNoteHtml(note.html) || '<p class="split-view-empty">Note vide.</p>');
+  wikilinkHoverPreviewEl.classList.remove("hidden");
+  const linkRect = link.getBoundingClientRect();
+  const pageRect = notePage.getBoundingClientRect();
+  wikilinkHoverPreviewEl.style.left = `${linkRect.left - pageRect.left}px`;
+  wikilinkHoverPreviewEl.style.top = `${linkRect.bottom - pageRect.top + 6}px`;
+}
+
+function hideWikilinkHoverPreview() {
+  wikilinkHoverPreviewEl.classList.add("hidden");
+}
+
+textEditor.addEventListener("mouseover", (e) => {
+  const link = e.target.closest("a.wikilink");
+  if (!link) return;
+  clearTimeout(wikilinkHoverHideTimer);
+  clearTimeout(wikilinkHoverTimer);
+  wikilinkHoverTimer = setTimeout(() => showWikilinkHoverPreview(link), 350);
+});
+textEditor.addEventListener("mouseout", (e) => {
+  const link = e.target.closest("a.wikilink");
+  if (!link) return;
+  clearTimeout(wikilinkHoverTimer);
+  // A short delay before hiding: lets the pointer travel from the link down
+  // into the preview box itself (to scroll it, say) without it vanishing
+  // the instant the cursor leaves the link's own bounding box.
+  wikilinkHoverHideTimer = setTimeout(hideWikilinkHoverPreview, 250);
+});
+wikilinkHoverPreviewEl.addEventListener("mouseenter", () => clearTimeout(wikilinkHoverHideTimer));
+wikilinkHoverPreviewEl.addEventListener("mouseleave", hideWikilinkHoverPreview);
+
 // --- Transclusion: typing ![[Titre]] embeds a read-only, refreshed-on-open
-// snapshot of that note's content right here, instead of just linking to it. ---
-function renderTransclusionBlock(el, note) {
+// snapshot of that note's content right here, instead of just linking to it.
+// ![[Titre#N]] embeds only the N-th block (paragraph/titre/item) of that
+// note, still refreshed from the live source each time the note is opened. ---
+// Top-level nodes of a note's HTML, one per "block". The editor often leaves
+// the very first line as a bare text node (no wrapping <div>/<p>) until a
+// second line is typed, so plain text nodes count as blocks too.
+function getNoteBlockElements(note) {
+  const container = document.createElement("div");
+  container.innerHTML = sanitizeNoteHtml(note.html) || "";
+  return Array.from(container.childNodes).filter(
+    (n) => n.nodeType === 1 || (n.nodeType === 3 && n.textContent.trim()),
+  );
+}
+
+function blockOuterHtml(node) {
+  if (node.nodeType === 1) return node.outerHTML;
+  return "<p>" + escapeHtml(node.textContent) + "</p>";
+}
+
+function renderTransclusionBlock(el, note, blockIndex) {
   el.innerHTML = "";
   const header = document.createElement("div");
   header.className = "transclusion-header";
-  header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
   const body = document.createElement("div");
   body.className = "transclusion-body";
-  body.innerHTML = note.locked ? "<p><em>Cette note est verrouillée.</em></p>" : sanitizeNoteHtml(note.html) || "<p><em>Note vide.</em></p>";
+  if (note.locked) {
+    header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
+    body.innerHTML = "<p><em>Cette note est verrouillée.</em></p>";
+  } else if (blockIndex != null) {
+    const blocks = getNoteBlockElements(note);
+    const block = blocks[blockIndex];
+    header.textContent = "↳ Bloc n°" + (blockIndex + 1) + " de « " + (note.title || "Sans titre") + " »";
+    body.innerHTML = block ? blockOuterHtml(block) : "<p><em>Bloc introuvable (la note source a changé).</em></p>";
+  } else {
+    header.textContent = "↳ Extrait de « " + (note.title || "Sans titre") + " »";
+    body.innerHTML = sanitizeNoteHtml(note.html) || "<p><em>Note vide.</em></p>";
+  }
   el.appendChild(header);
   el.appendChild(body);
 }
 
-function insertTransclusionBlock(target) {
+function insertTransclusionBlock(target, blockIndex) {
   const div = document.createElement("div");
   div.className = "transclusion";
   div.contentEditable = "false";
   div.dataset.noteId = target.id;
-  renderTransclusionBlock(div, target);
+  if (blockIndex != null) div.dataset.blockIndex = String(blockIndex);
+  renderTransclusionBlock(div, target, blockIndex);
   return div;
 }
 
@@ -4232,7 +5650,8 @@ function refreshTransclusions() {
       el.innerHTML = '<div class="transclusion-header">↳ Note source introuvable (supprimée)</div>';
       return;
     }
-    renderTransclusionBlock(el, source);
+    const blockIndex = el.dataset.blockIndex != null ? Number(el.dataset.blockIndex) : null;
+    renderTransclusionBlock(el, source, blockIndex);
   });
 }
 
@@ -4245,11 +5664,22 @@ textEditor.addEventListener("input", () => {
   const text = node.textContent.slice(0, offset);
   const match = text.match(/!\[\[([^[\]]+)\]\]$/);
   if (!match) return;
-  const query = match[1].trim().toLowerCase();
+  const raw = match[1].trim();
+  const hashIdx = raw.lastIndexOf("#");
+  let queryTitle = raw;
+  let blockIndex = null;
+  if (hashIdx > 0) {
+    const maybeNum = raw.slice(hashIdx + 1).trim();
+    if (/^\d+$/.test(maybeNum) && Number(maybeNum) > 0) {
+      queryTitle = raw.slice(0, hashIdx).trim();
+      blockIndex = Number(maybeNum) - 1;
+    }
+  }
+  const query = queryTitle.toLowerCase();
   if (!query) return;
   const target =
-    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
-    notes.find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
+    notesInActiveVault().find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase() === query) ||
+    notesInActiveVault().find((n) => !n.deletedAt && n.id !== currentNote.id && (n.title || "").toLowerCase().includes(query));
   if (!target) return;
   const full = match[0];
   const range = document.createRange();
@@ -4257,7 +5687,7 @@ textEditor.addEventListener("input", () => {
     range.setStart(node, offset - full.length);
     range.setEnd(node, offset);
     range.deleteContents();
-    const block = insertTransclusionBlock(target);
+    const block = insertTransclusionBlock(target, blockIndex);
     range.insertNode(block);
     const p = document.createElement("p");
     p.innerHTML = "<br>";
@@ -4519,6 +5949,7 @@ async function insertImageFile(file) {
     textEditor.appendChild(img);
   }
   scheduleSave();
+  indexImageTextForNote(currentNote, dataUrl);
 }
 
 imageInput.addEventListener("change", () => {
@@ -4680,6 +6111,27 @@ function getTesseractWorker() {
     tesseractWorkerPromise = loadTesseract().then((Tesseract) => Tesseract.createWorker("fra"));
   }
   return tesseractWorkerPromise;
+}
+
+// Runs OCR on every inserted/pasted photo in the background — no toast, no
+// visible text added to the note — just folds whatever text it finds into
+// note.ocrText so the image becomes findable via the normal search box
+// (noteHaystack() includes it). A silent best-effort: offline or a CDN
+// hiccup just means that one image stays un-indexed, same as not having
+// OCR at all.
+async function indexImageTextForNote(note, dataUrl) {
+  try {
+    const worker = await getTesseractWorker();
+    const { data } = await worker.recognize(dataUrl);
+    const text = (data.text || "").trim();
+    if (!text) return;
+    const existing = note.ocrText || "";
+    if (existing.includes(text)) return;
+    note.ocrText = (existing + " " + text).trim();
+    persistNote(note);
+  } catch {
+    /* offline or CDN unreachable — silent, this is a background enhancement */
+  }
 }
 
 function insertTextAtCursor(text) {
@@ -5438,6 +6890,7 @@ const clearDrawBtn = document.getElementById("clear-draw-btn");
 const eraserBtn = document.getElementById("eraser-btn");
 const penBtn = document.getElementById("pen-btn");
 const highlighterBtn = document.getElementById("highlighter-btn");
+const shapeRecognitionBtn = document.getElementById("shape-recognition-btn");
 const drawHint = document.getElementById("draw-hint");
 
 const COLORS = ["#1d1d1f", "#a13d3d", "#a8752c", "#3d6b52", "#3a5a8c", "#6b4a8c"];
@@ -5447,6 +6900,9 @@ let drawWidth = 3;
 let isErasing = false;
 let isHighlighting = false;
 let activeStroke = null;
+
+const SHAPE_RECOGNITION_PREF_KEY = "noteflow.shapeRecognition";
+let shapeRecognitionEnabled = loadPref(SHAPE_RECOGNITION_PREF_KEY, false);
 
 function setTool(tool) {
   isErasing = tool === "eraser";
@@ -5484,6 +6940,13 @@ renderColorRow();
 
 penBtn.addEventListener("click", () => setTool("pen"));
 highlighterBtn.addEventListener("click", () => setTool("highlighter"));
+setPressed(shapeRecognitionBtn, shapeRecognitionEnabled);
+shapeRecognitionBtn.addEventListener("click", () => {
+  shapeRecognitionEnabled = !shapeRecognitionEnabled;
+  savePref(SHAPE_RECOGNITION_PREF_KEY, shapeRecognitionEnabled);
+  setPressed(shapeRecognitionBtn, shapeRecognitionEnabled);
+  showToast(shapeRecognitionEnabled ? "Lissage des formes activé" : "Lissage des formes désactivé");
+});
 
 // Each tool remembers its own width — a thin pen and a fat eraser don't have
 // to fight over one shared slider position — and the eraser's range starts
@@ -5631,12 +7094,80 @@ function snapHighlightStroke(stroke) {
   ];
 }
 
+// --- Shape recognition: a hand-drawn stroke that's nearly straight becomes
+// a clean line; one that loops back close to where it started and stays
+// roughly equidistant from its own centroid becomes a clean ellipse. Only
+// runs when the toggle is on and only for plain pen strokes (never
+// highlighter, which already gets its own straight-bar treatment, or the
+// eraser, which has no shape to speak of). ---
+function strokeBoundingBox(points) {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+}
+
+function pointDist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function recognizeShape(stroke) {
+  const pts = stroke.points;
+  if (pts.length < 6) return;
+  const box = strokeBoundingBox(pts);
+  const diag = Math.hypot(box.maxX - box.minX, box.maxY - box.minY);
+  if (diag < 0.01) return;
+  const start = pts[0];
+  const end = pts[pts.length - 1];
+
+  // Straight line: every point stays close to the segment joining the
+  // stroke's own start and end.
+  const lineLen = pointDist(start, end) || 1e-6;
+  const dx = (end.x - start.x) / lineLen;
+  const dy = (end.y - start.y) / lineLen;
+  let maxDeviation = 0;
+  pts.forEach((p) => {
+    const t = (p.x - start.x) * dx + (p.y - start.y) * dy;
+    const projX = start.x + t * dx;
+    const projY = start.y + t * dy;
+    maxDeviation = Math.max(maxDeviation, pointDist(p, { x: projX, y: projY }));
+  });
+  if (maxDeviation < diag * 0.045) {
+    stroke.points = [start, end];
+    return;
+  }
+
+  // Closed loop close to circular/elliptical: the path ends near where it
+  // started, and every point sits at roughly the same distance from the
+  // stroke's centroid.
+  if (pointDist(start, end) > diag * 0.3) return;
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  const radii = pts.map((p) => pointDist(p, { x: cx, y: cy }));
+  const meanR = radii.reduce((s, r) => s + r, 0) / radii.length;
+  if (meanR < 1e-6) return;
+  const variance = radii.reduce((s, r) => s + (r - meanR) ** 2, 0) / radii.length;
+  const relSpread = Math.sqrt(variance) / meanR;
+  if (relSpread > 0.28) return;
+  const rx = (box.maxX - box.minX) / 2;
+  const ry = (box.maxY - box.minY) / 2;
+  const ellipse = [];
+  const steps = 40;
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    ellipse.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+  }
+  stroke.points = ellipse;
+}
+
 function endStroke() {
   if (!activeStroke) return;
   const stroke = activeStroke;
   activeStroke = null;
   if (stroke.highlight) {
     snapHighlightStroke(stroke);
+    redrawStrokes();
+  } else if (shapeRecognitionEnabled && !stroke.erase) {
+    recognizeShape(stroke);
     redrawStrokes();
   }
   scheduleSave();
@@ -5758,6 +7289,37 @@ function setLocalBackupStatus(text) {
 
 localBackupToggle.addEventListener("click", () => localBackupPanel.classList.toggle("hidden"));
 
+// Merges an array of notes (from a JSON.parse of some external source — a
+// sync file, a WebDAV snapshot) into the in-memory `notes`, same
+// last-write-wins-by-updatedAt rule as manual JSON import. Returns counts so
+// callers can report something meaningful instead of a generic "done".
+async function mergeExternalNotes(imported) {
+  let added = 0;
+  let updated = 0;
+  for (const note of imported) {
+    if (!note || !note.id) continue;
+    if (note.html) note.html = sanitizeNoteHtml(note.html);
+    const index = notes.findIndex((n) => n.id === note.id);
+    if (index === -1) {
+      notes.push(note);
+      added++;
+    } else if ((note.updatedAt || 0) > (notes[index].updatedAt || 0)) {
+      notes[index] = note;
+      updated++;
+    }
+    if (added || updated) await dbPut(note);
+  }
+  if (added || updated) renderList();
+  return { added, updated };
+}
+
+// The same folder written by another device (an iCloud Drive / Google Drive
+// desktop-synced folder, picked on both machines) turns this from a one-way
+// backup into real two-way sync: read whatever the other device last wrote
+// to the stable sync file, merge it in, then write the merged state back —
+// both a timestamped backup (history) and the live sync file (merge target).
+const LOCAL_SYNC_FILENAME = "noteflow-sync.json";
+
 async function runLocalBackup(silent) {
   if (!backupDirHandle) return;
   try {
@@ -5766,13 +7328,32 @@ async function runLocalBackup(silent) {
       setLocalBackupStatus("🔴 Permission refusée pour ce dossier");
       return;
     }
+    let mergeResult = { added: 0, updated: 0 };
+    try {
+      const existingHandle = await backupDirHandle.getFileHandle(LOCAL_SYNC_FILENAME);
+      const file = await existingHandle.getFile();
+      const imported = JSON.parse(await file.text());
+      if (Array.isArray(imported)) mergeResult = await mergeExternalNotes(imported);
+    } catch {
+      /* no sync file yet on this folder, or it couldn't be read — fine, this write creates it */
+    }
+
+    const syncHandle = await backupDirHandle.getFileHandle(LOCAL_SYNC_FILENAME, { create: true });
+    const syncWritable = await syncHandle.createWritable();
+    await syncWritable.write(JSON.stringify(notes, null, 2));
+    await syncWritable.close();
+
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const fileHandle = await backupDirHandle.getFileHandle(`noteflow-backup-${stamp}.json`, { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(JSON.stringify(notes, null, 2));
     await writable.close();
-    setLocalBackupStatus(`🟢 Dernière sauvegarde : ${new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}`);
-    if (!silent) showToast("Sauvegarde locale effectuée");
+
+    setLocalBackupStatus(`🟢 Synchronisé : ${new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}`);
+    if (!silent) {
+      const mergeText = mergeResult.added || mergeResult.updated ? ` (${mergeResult.added} ajoutée(s), ${mergeResult.updated} mise(s) à jour depuis le dossier)` : "";
+      showToast("Sauvegarde et synchronisation locale effectuées" + mergeText);
+    }
   } catch (err) {
     setLocalBackupStatus("🔴 Échec de la sauvegarde : " + err.message);
   }
@@ -5821,11 +7402,108 @@ localBackupDisableBtn.addEventListener("click", async () => {
 // mean a server component this app deliberately doesn't have.
 setInterval(() => runLocalBackup(true), 30 * 60 * 1000);
 
+// --- WebDAV sync: an alternative to configuring a Firebase project, for
+// anyone who already has a WebDAV server (Nextcloud, ownCloud, most self-
+// hosted or classic cloud-storage setups expose one). A single JSON
+// snapshot file, fetched with GET/merged locally/pushed back with PUT —
+// simpler than Firebase's per-note documents + live listener, since plain
+// HTTP has no equivalent of Firestore's realtime subscription. ---
+const WEBDAV_KEYS = { url: "noteflow.webdav.url", user: "noteflow.webdav.user" };
+const webdavToggle = document.getElementById("webdav-toggle");
+const webdavPanel = document.getElementById("webdav-panel");
+const webdavStatusEl = document.getElementById("webdav-status");
+const webdavUrlInput = document.getElementById("webdav-url-input");
+const webdavUserInput = document.getElementById("webdav-user-input");
+const webdavPassInput = document.getElementById("webdav-pass-input");
+const webdavSaveBtn = document.getElementById("webdav-save-btn");
+const webdavSyncNowBtn = document.getElementById("webdav-sync-now-btn");
+const webdavDisableBtn = document.getElementById("webdav-disable-btn");
+
+let webdavConfig = null; // { url, user, pass } — pass kept in memory only, never persisted
+let webdavInterval = null;
+
+function setWebdavStatus(text) {
+  webdavStatusEl.textContent = text;
+}
+
+webdavToggle.addEventListener("click", () => webdavPanel.classList.toggle("hidden"));
+
+async function runWebdavSync(silent) {
+  if (!webdavConfig) return;
+  try {
+    setWebdavStatus("Synchronisation…");
+    const authHeader = "Basic " + btoa(`${webdavConfig.user}:${webdavConfig.pass}`);
+    let mergeResult = { added: 0, updated: 0 };
+    const getResp = await fetch(webdavConfig.url, { method: "GET", headers: { Authorization: authHeader } });
+    if (getResp.ok) {
+      const remoteNotes = await getResp.json();
+      if (Array.isArray(remoteNotes)) mergeResult = await mergeExternalNotes(remoteNotes);
+    } else if (getResp.status !== 404) {
+      throw new Error(`GET ${getResp.status}`);
+    }
+    const putResp = await fetch(webdavConfig.url, {
+      method: "PUT",
+      headers: { Authorization: authHeader, "Content-Type": "application/json" },
+      body: JSON.stringify(notes),
+    });
+    if (!putResp.ok) throw new Error(`PUT ${putResp.status}`);
+    setWebdavStatus(`🟢 Synchronisé : ${new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })}`);
+    if (!silent) {
+      const mergeText = mergeResult.added || mergeResult.updated ? ` (${mergeResult.added} ajoutée(s), ${mergeResult.updated} mise(s) à jour)` : "";
+      showToast("Synchronisation WebDAV effectuée" + mergeText);
+    }
+  } catch (err) {
+    setWebdavStatus("🔴 Échec de la synchronisation : " + err.message + " (vérifie l'URL, les identifiants, et que le serveur autorise CORS)");
+  }
+}
+
+webdavSaveBtn.addEventListener("click", async () => {
+  const url = webdavUrlInput.value.trim();
+  const user = webdavUserInput.value.trim();
+  const pass = webdavPassInput.value;
+  if (!url || !user || !pass) {
+    setWebdavStatus("🔴 URL, identifiant et mot de passe sont requis");
+    return;
+  }
+  webdavConfig = { url, user, pass };
+  savePref(WEBDAV_KEYS.url, url);
+  savePref(WEBDAV_KEYS.user, user);
+  webdavPassInput.value = "";
+  if (webdavInterval) clearInterval(webdavInterval);
+  webdavInterval = setInterval(() => runWebdavSync(true), 5 * 60 * 1000);
+  await runWebdavSync(false);
+});
+
+webdavSyncNowBtn.addEventListener("click", () => runWebdavSync(false));
+
+webdavDisableBtn.addEventListener("click", () => {
+  localStorage.removeItem(WEBDAV_KEYS.url);
+  localStorage.removeItem(WEBDAV_KEYS.user);
+  webdavConfig = null;
+  if (webdavInterval) {
+    clearInterval(webdavInterval);
+    webdavInterval = null;
+  }
+  setWebdavStatus("Synchronisation WebDAV non configurée");
+  showToast("Synchronisation WebDAV désactivée");
+});
+
+(() => {
+  const url = loadPref(WEBDAV_KEYS.url, null);
+  const user = loadPref(WEBDAV_KEYS.user, null);
+  if (url && user) {
+    webdavUrlInput.value = url;
+    webdavUserInput.value = user;
+    webdavPanel.classList.remove("hidden");
+    setWebdavStatus("🟡 Synchronisation WebDAV configurée : entre le mot de passe et clique « Activer » pour reprendre");
+  }
+})();
+
 // --- Journal: a dated note per day, in a "Journal" folder, matched by
 // journalDate (not by title, so renaming a day's entry doesn't orphan it)
 // with a mini calendar to jump to any date and see which days have one. ---
 async function openOrCreateJournalNote(dateStr) {
-  let note = notes.find((n) => !n.deletedAt && n.journalDate === dateStr);
+  let note = notesInActiveVault().find((n) => !n.deletedAt && n.journalDate === dateStr);
   if (!note) {
     note = newNoteObject();
     note.journalDate = dateStr;
@@ -5851,7 +7529,7 @@ function renderJournalCalendar() {
   const year = journalCalViewDate.getFullYear();
   const month = journalCalViewDate.getMonth();
   journalCalMonthLabel.textContent = journalCalViewDate.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
-  const entryDates = new Set(notes.filter((n) => !n.deletedAt && n.journalDate).map((n) => n.journalDate));
+  const entryDates = new Set(notesInActiveVault().filter((n) => !n.deletedAt && n.journalDate).map((n) => n.journalDate));
   const firstOfMonth = new Date(year, month, 1);
   const startWeekday = (firstOfMonth.getDay() + 6) % 7; // Monday-first
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -5898,12 +7576,18 @@ journalCalOverlay.addEventListener("click", (e) => {
 });
 
 // --- Cloud sync (Firebase, optional) ---
-const SYNC_KEYS = { config: "noteflow.sync.config", code: "noteflow.sync.code" };
+// End-to-end encrypted: every note is encrypted on this device, with a key
+// derived from a passphrase that is NEVER sent to Firebase, before it ever
+// leaves for the sync collection. Firebase (and anyone with read access to
+// the project) only ever sees ciphertext + an id + a timestamp — it cannot
+// read note content, not even us.
+const SYNC_KEYS = { config: "noteflow.sync.config", code: "noteflow.sync.code", e2eeSalt: "noteflow.sync.e2eeSalt" };
 const syncToggle = document.getElementById("sync-toggle");
 const syncPanel = document.getElementById("sync-panel");
 const syncStatusEl = document.getElementById("sync-status");
 const syncConfigInput = document.getElementById("sync-config-input");
 const syncCodeInput = document.getElementById("sync-code-input");
+const syncPassphraseInput = document.getElementById("sync-passphrase-input");
 const syncSaveBtn = document.getElementById("sync-save-btn");
 const syncDisableBtn = document.getElementById("sync-disable-btn");
 
@@ -5911,6 +7595,22 @@ let syncDb = null;
 let syncCode = "";
 let syncFns = null;
 let unsubscribeSnapshot = null;
+// The derived AES-GCM key lives only in memory, for this session — the
+// passphrase itself is never persisted anywhere, so it has to be re-entered
+// once per browser session (a deliberate trade-off: convenience vs. genuine
+// end-to-end confidentiality).
+let syncEncryptionKey = null;
+
+async function encryptNoteForSync(note) {
+  const plaintext = JSON.stringify(note);
+  const blob = await encryptString(syncEncryptionKey, plaintext);
+  return { id: note.id, updatedAt: note.updatedAt, deletedMarker: false, e2ee: true, blob };
+}
+
+async function decryptNoteFromSync(remote) {
+  const plaintext = await decryptString(syncEncryptionKey, remote.blob);
+  return JSON.parse(plaintext);
+}
 // A Set of note ids, not a single flag: a global boolean meant that any
 // local edit autosaved during the awaits inside handleRemoteSnapshot (typing
 // in an unrelated note while a snapshot for a different note was still
@@ -5936,9 +7636,19 @@ async function loadFirebase() {
   return { ...appMod, ...authMod, ...storeMod };
 }
 
-async function startSync(config, code) {
+async function startSync(config, code, passphrase) {
   try {
     setSyncStatus("Connexion…");
+    let saltB64 = loadPref(SYNC_KEYS.e2eeSalt, null);
+    let saltBytes;
+    if (saltB64) {
+      saltBytes = b64ToBytes(saltB64);
+    } else {
+      saltBytes = crypto.getRandomValues(new Uint8Array(16));
+      savePref(SYNC_KEYS.e2eeSalt, bytesToB64(saltBytes));
+    }
+    syncEncryptionKey = await deriveKey(passphrase, saltBytes);
+
     const fb = await loadFirebase();
     if (unsubscribeSnapshot) {
       unsubscribeSnapshot();
@@ -5958,23 +7668,27 @@ async function startSync(config, code) {
       (snapshot) => handleRemoteSnapshot(snapshot),
       (err) => setSyncStatus("🔴 Erreur de synchronisation : " + err.message)
     );
-    setSyncStatus("🟢 Synchronisation active");
+    setSyncStatus("🟢 Synchronisation active (chiffrée de bout en bout)");
   } catch (err) {
     setSyncStatus("🔴 Erreur : " + err.message);
   }
 }
 
 async function handleRemoteSnapshot(snapshot) {
+  if (!syncEncryptionKey) {
+    setSyncStatus("🟡 Synchronisation chiffrée : entre ta phrase secrète pour déchiffrer");
+    return;
+  }
   for (const change of snapshot.docChanges()) {
-    const remote = change.doc.data();
-    applyingRemoteChangeIds.add(remote.id);
-    const localIndex = notes.findIndex((n) => n.id === remote.id);
+    const encryptedRemote = change.doc.data();
+    applyingRemoteChangeIds.add(encryptedRemote.id);
+    const localIndex = notes.findIndex((n) => n.id === encryptedRemote.id);
     if (change.type === "removed") {
       if (localIndex !== -1) {
         notes.splice(localIndex, 1);
-        await dbDelete(remote.id);
+        await dbDelete(encryptedRemote.id);
       }
-    } else if (localIndex === -1 || remote.updatedAt > notes[localIndex].updatedAt) {
+    } else if (localIndex === -1 || encryptedRemote.updatedAt > notes[localIndex].updatedAt) {
       // Never apply a remote snapshot over a note with an unsaved edit still
       // pending (autosave debounce in flight): replacing textEditor.innerHTML
       // mid-keystroke jumps the caret to the start and can drop the current
@@ -5983,11 +7697,35 @@ async function handleRemoteSnapshot(snapshot) {
       // here is safe — the pending flush stamps its own updatedAt = now, so
       // it will win the comparison above on the *next* remote snapshot and
       // push the local edit back out once the user is done typing.
-      if (currentNote && currentNote.id === remote.id && editorScreen.classList.contains("active") && saveTimer) {
-        applyingRemoteChangeIds.delete(remote.id);
+      if (currentNote && currentNote.id === encryptedRemote.id && editorScreen.classList.contains("active") && saveTimer) {
+        applyingRemoteChangeIds.delete(encryptedRemote.id);
+        continue;
+      }
+      let remote;
+      try {
+        remote = encryptedRemote.e2ee ? await decryptNoteFromSync(encryptedRemote) : encryptedRemote;
+      } catch {
+        // Wrong passphrase (or a device that used a different one) produces
+        // undecryptable ciphertext — skip rather than crash the whole sync
+        // listener on one bad document.
+        applyingRemoteChangeIds.delete(encryptedRemote.id);
         continue;
       }
       if (remote.html) remote.html = sanitizeNoteHtml(remote.html);
+      const local = localIndex !== -1 ? notes[localIndex] : null;
+      // A real conflict — not just "the remote is newer" (that's the normal
+      // case and needs no prompt) — is when THIS device also changed the
+      // note since the last time it successfully synced, and the two
+      // versions actually differ in content. Silently taking whichever
+      // arrived with the later timestamp would drop one edit for good.
+      const hasUnsyncedLocalChanges = local && local.lastSyncedAt && local.updatedAt > local.lastSyncedAt;
+      const contentDiffers = local && (remote.html !== local.html || remote.title !== local.title);
+      if (hasUnsyncedLocalChanges && contentDiffers) {
+        queueSyncConflict(local, remote);
+        applyingRemoteChangeIds.delete(encryptedRemote.id);
+        continue;
+      }
+      remote.lastSyncedAt = remote.updatedAt;
       if (localIndex === -1) notes.unshift(remote);
       else notes[localIndex] = remote;
       await dbPut(remote);
@@ -5996,9 +7734,136 @@ async function handleRemoteSnapshot(snapshot) {
         loadNoteIntoEditor();
       }
     }
-    applyingRemoteChangeIds.delete(remote.id);
+    applyingRemoteChangeIds.delete(encryptedRemote.id);
   }
   if (listScreen.classList.contains("active")) renderList();
+  setSyncStatus("🟢 Synchronisation active (chiffrée de bout en bout)");
+}
+
+// --- Visual conflict resolution: instead of last-write-wins silently
+// dropping whichever edit lost the timestamp race, a genuine divergence
+// (this device changed the note since its last sync, AND the incoming
+// remote version has different content) is queued and surfaced with a diff,
+// same word-level algorithm as the version history panel. ---
+let pendingConflicts = [];
+const conflictBtn = document.getElementById("conflict-btn");
+const conflictPanel = document.getElementById("conflict-panel");
+const conflictListEl = document.getElementById("conflict-list");
+conflictBtn.addEventListener("click", () => {
+  showList();
+  const opening = conflictPanel.classList.contains("hidden");
+  conflictPanel.classList.toggle("hidden");
+  if (opening) renderConflictPanel();
+});
+
+function queueSyncConflict(local, remote) {
+  if (pendingConflicts.some((c) => c.remote.id === remote.id)) return;
+  pendingConflicts.push({ local: { ...local }, remote });
+  updateConflictBadge();
+  showToast(`Conflit détecté sur « ${local.title || "Sans titre"} » — modifiée sur deux appareils à la fois`, () => conflictBtn.click(), {
+    actionLabel: "Résoudre",
+    ctrlZ: false,
+  });
+}
+
+function updateConflictBadge() {
+  conflictBtn.classList.toggle("hidden", pendingConflicts.length === 0);
+  conflictBtn.textContent = `⚠ Conflits (${pendingConflicts.length})`;
+}
+
+async function resolveConflict(index, resolution) {
+  const conflict = pendingConflicts[index];
+  if (!conflict) return;
+  const { local, remote } = conflict;
+  if (resolution === "local") {
+    // Re-push the local version with a fresher timestamp so it wins on the
+    // next round-trip instead of the remote version silently reappearing.
+    local.updatedAt = Date.now();
+    local.lastSyncedAt = local.updatedAt;
+    const idx = notes.findIndex((n) => n.id === local.id);
+    if (idx !== -1) notes[idx] = local;
+    await persistNote(local);
+  } else if (resolution === "remote") {
+    remote.lastSyncedAt = remote.updatedAt;
+    const idx = notes.findIndex((n) => n.id === remote.id);
+    if (idx !== -1) notes[idx] = remote;
+    else notes.unshift(remote);
+    await dbPut(remote);
+  } else if (resolution === "both") {
+    remote.lastSyncedAt = remote.updatedAt;
+    const idx = notes.findIndex((n) => n.id === remote.id);
+    if (idx !== -1) notes[idx] = remote;
+    else notes.unshift(remote);
+    await dbPut(remote);
+    const duplicate = { ...local, id: crypto.randomUUID(), title: `${local.title || "Sans titre"} (version en conflit)`, updatedAt: Date.now() };
+    duplicate.lastSyncedAt = null;
+    notes.unshift(duplicate);
+    await persistNote(duplicate);
+  }
+  pendingConflicts.splice(index, 1);
+  updateConflictBadge();
+  renderConflictPanel();
+  renderList();
+  if (currentNote && (currentNote.id === local.id || currentNote.id === remote.id) && editorScreen.classList.contains("active")) {
+    const stillThere = notes.find((n) => n.id === currentNote.id);
+    if (stillThere) {
+      currentNote = stillThere;
+      loadNoteIntoEditor();
+    }
+  }
+}
+
+function renderConflictPanel() {
+  conflictListEl.innerHTML = "";
+  if (!pendingConflicts.length) {
+    conflictListEl.innerHTML = '<li class="history-empty">Aucun conflit en attente.</li>';
+    return;
+  }
+  pendingConflicts.forEach((conflict, index) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const title = document.createElement("p");
+    title.style.fontWeight = "700";
+    title.textContent = conflict.local.title || conflict.remote.title || "Sans titre";
+    const diffBox = document.createElement("div");
+    diffBox.className = "history-diff";
+    const parts = diffWords(stripHtml(conflict.local.html), stripHtml(conflict.remote.html));
+    if (parts) {
+      parts.forEach((p) => {
+        if (p.type === "same") diffBox.appendChild(document.createTextNode(p.text));
+        else {
+          const mark = document.createElement(p.type === "del" ? "del" : "ins");
+          mark.textContent = p.text;
+          mark.title = p.type === "del" ? "Seulement dans la version d'ici" : "Seulement dans la version distante";
+          diffBox.appendChild(mark);
+        }
+      });
+    } else {
+      diffBox.textContent = "Notes trop volumineuses pour un aperçu détaillé.";
+    }
+    const actions = document.createElement("div");
+    actions.className = "sync-actions";
+    const keepLocal = document.createElement("button");
+    keepLocal.type = "button";
+    keepLocal.textContent = "Garder la mienne";
+    keepLocal.addEventListener("click", () => resolveConflict(index, "local"));
+    const keepRemote = document.createElement("button");
+    keepRemote.type = "button";
+    keepRemote.textContent = "Garder celle de l'autre appareil";
+    keepRemote.addEventListener("click", () => resolveConflict(index, "remote"));
+    const keepBoth = document.createElement("button");
+    keepBoth.type = "button";
+    keepBoth.className = "link-btn";
+    keepBoth.textContent = "Garder les deux";
+    keepBoth.addEventListener("click", () => resolveConflict(index, "both"));
+    actions.appendChild(keepLocal);
+    actions.appendChild(keepRemote);
+    actions.appendChild(keepBoth);
+    li.appendChild(title);
+    li.appendChild(diffBox);
+    li.appendChild(actions);
+    conflictListEl.appendChild(li);
+  });
 }
 
 async function persistNote(note) {
@@ -6017,9 +7882,15 @@ async function persistNote(note) {
   }
   try {
     await dbPut(note);
-    if (syncDb && syncCode && !applyingRemoteChangeIds.has(note.id)) {
+    if (syncDb && syncCode && syncEncryptionKey && !applyingRemoteChangeIds.has(note.id)) {
       try {
-        await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), note);
+        const payload = await encryptNoteForSync(note);
+        await syncFns.setDoc(syncFns.doc(syncDb, "syncs", syncCode, "notes", note.id), payload);
+        // Marks this exact version as the last one known to have reached
+        // the sync backend — the conflict check compares against this, not
+        // against updatedAt alone, to tell "genuinely diverged" apart from
+        // "just hasn't synced yet".
+        note.lastSyncedAt = note.updatedAt;
       } catch (err) {
         console.warn("sync push failed", err);
       }
@@ -6064,9 +7935,15 @@ syncSaveBtn.addEventListener("click", async () => {
     setSyncStatus("🔴 Indique un code de synchronisation");
     return;
   }
+  const passphrase = syncPassphraseInput.value;
+  if (!passphrase) {
+    setSyncStatus("🔴 La phrase secrète de chiffrement est requise");
+    return;
+  }
   savePref(SYNC_KEYS.config, config);
   savePref(SYNC_KEYS.code, code);
-  await startSync(config, code);
+  syncPassphraseInput.value = "";
+  await startSync(config, code, passphrase);
 });
 
 syncDisableBtn.addEventListener("click", () => {
@@ -6078,23 +7955,129 @@ syncDisableBtn.addEventListener("click", () => {
   // mid-remote-application.
   unsubscribeSnapshot = null;
   syncFns = null;
+  syncEncryptionKey = null;
   applyingRemoteChangeIds.clear();
   syncDb = null;
   syncCode = "";
   setSyncStatus("Synchronisation non configurée");
 });
 
+// The passphrase is never persisted, so a fresh page load can restore the
+// Firebase config/code automatically but can't restore the encryption key —
+// the user has to re-enter it once per session before sync actually
+// resumes exchanging data (the alternative, storing the key or passphrase
+// on disk, would defeat the point of end-to-end encryption).
 async function initSyncFromStorage() {
   const config = loadPref(SYNC_KEYS.config, null);
   const code = loadPref(SYNC_KEYS.code, "");
   if (config && code) {
     syncConfigInput.value = JSON.stringify(config, null, 2);
     syncCodeInput.value = code;
-    await startSync(config, code);
+    syncPanel.classList.remove("hidden");
+    setSyncStatus("🟡 Synchronisation configurée : entre ta phrase secrète et clique « Activer » pour reprendre");
   }
 }
 
-// --- Keyboard shortcuts ---
+// --- Keyboard shortcuts (customizable) ---
+// Only the global Ctrl/Cmd+<letter> shortcuts are remappable — context-only
+// ones (drawing undo/redo, table navigation) stay fixed, since making those
+// safely reassignable would mean plumbing the bindings through several
+// unrelated subsystems for comparatively little benefit.
+const SHORTCUT_DEFS = [
+  { id: "command-palette", label: "Palette de commandes", defaultKey: "k" },
+  { id: "new-note", label: "Nouvelle note (liste)", defaultKey: "n" },
+  { id: "search", label: "Rechercher", defaultKey: "f" },
+  { id: "save", label: "Sauvegarder (éditeur)", defaultKey: "s" },
+];
+const SHORTCUTS_PREF_KEY = "noteflow.shortcuts";
+
+function loadShortcutBindings() {
+  const overrides = loadPref(SHORTCUTS_PREF_KEY, {});
+  const bindings = {};
+  SHORTCUT_DEFS.forEach((d) => (bindings[d.id] = overrides[d.id] || d.defaultKey));
+  return bindings;
+}
+
+function saveShortcutBinding(id, key) {
+  const overrides = loadPref(SHORTCUTS_PREF_KEY, {});
+  overrides[id] = key;
+  savePref(SHORTCUTS_PREF_KEY, overrides);
+}
+
+// --- Keyboard shortcut settings panel ---
+const shortcutsBtn = document.getElementById("shortcuts-btn");
+const shortcutsPanel = document.getElementById("shortcuts-panel");
+const shortcutsListEl = document.getElementById("shortcuts-list");
+const isMac = navigator.platform.toLowerCase().includes("mac") || navigator.userAgent.toLowerCase().includes("mac");
+const MOD_LABEL = isMac ? "⌘" : "Ctrl";
+
+function renderShortcutsPanel() {
+  const bindings = loadShortcutBindings();
+  shortcutsListEl.innerHTML = "";
+  SHORTCUT_DEFS.forEach((def) => {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    const label = document.createElement("span");
+    label.textContent = def.label;
+    const keyBadge = document.createElement("kbd");
+    keyBadge.className = "shortcut-key";
+    keyBadge.textContent = `${MOD_LABEL}+${bindings[def.id].toUpperCase()}`;
+    const changeBtn = document.createElement("button");
+    changeBtn.type = "button";
+    changeBtn.className = "link-btn";
+    changeBtn.textContent = "Changer";
+    changeBtn.addEventListener("click", () => {
+      changeBtn.textContent = "Appuie sur une touche…";
+      const captureKey = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const newKey = ev.key.toLowerCase();
+        if (newKey.length !== 1 || !/[a-z0-9]/.test(newKey)) {
+          changeBtn.textContent = "Touche invalide, réessaie";
+          return;
+        }
+        const conflict = SHORTCUT_DEFS.find((d) => d.id !== def.id && loadShortcutBindings()[d.id] === newKey);
+        if (conflict) {
+          changeBtn.textContent = `Déjà utilisé par « ${conflict.label} »`;
+          return;
+        }
+        saveShortcutBinding(def.id, newKey);
+        document.removeEventListener("keydown", captureKey, true);
+        renderShortcutsPanel();
+      };
+      document.addEventListener("keydown", captureKey, true);
+    });
+    const wrap = document.createElement("div");
+    wrap.style.display = "flex";
+    wrap.style.alignItems = "center";
+    wrap.style.gap = "8px";
+    wrap.appendChild(keyBadge);
+    wrap.appendChild(changeBtn);
+    li.appendChild(label);
+    li.appendChild(wrap);
+    shortcutsListEl.appendChild(li);
+  });
+  const resetLi = document.createElement("li");
+  resetLi.className = "history-item";
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "link-btn";
+  resetBtn.textContent = "Réinitialiser tous les raccourcis";
+  resetBtn.addEventListener("click", () => {
+    localStorage.removeItem(SHORTCUTS_PREF_KEY);
+    renderShortcutsPanel();
+    showToast("Raccourcis réinitialisés");
+  });
+  resetLi.appendChild(resetBtn);
+  shortcutsListEl.appendChild(resetLi);
+}
+
+shortcutsBtn.addEventListener("click", () => {
+  const opening = shortcutsPanel.classList.contains("hidden");
+  shortcutsPanel.classList.toggle("hidden");
+  if (opening) renderShortcutsPanel();
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (!cmdkOverlay.classList.contains("hidden")) {
@@ -6111,8 +8094,9 @@ document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (!mod) return;
   const key = e.key.toLowerCase();
+  const bindings = loadShortcutBindings();
 
-  if (key === "k") {
+  if (key === bindings["command-palette"]) {
     e.preventDefault();
     if (cmdkOverlay.classList.contains("hidden")) openCommandPalette();
     else closeCommandPalette();
@@ -6120,17 +8104,19 @@ document.addEventListener("keydown", (e) => {
   }
 
   // Undo (Ctrl/Cmd+Z): an active "undo this action" toast (delete, archive,
-  // clear drawing…) always takes priority, on either screen.
+  // clear drawing…) always takes priority, on either screen. Fixed, not
+  // remappable — "Z" for undo is universal enough it's not worth the
+  // confusion of letting it be reassigned.
   if (key === "z" && !e.shiftKey && triggerToastUndo()) {
     e.preventDefault();
     return;
   }
 
   if (listScreen.classList.contains("active")) {
-    if (key === "n") {
+    if (key === bindings["new-note"]) {
       e.preventDefault();
       newNoteBtn.click();
-    } else if (key === "f") {
+    } else if (key === bindings["search"]) {
       e.preventDefault();
       searchInput.focus();
     }
@@ -6155,10 +8141,10 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (key === "s") {
+  if (key === bindings["save"]) {
     e.preventDefault();
     flushSave(false);
-  } else if (key === "f") {
+  } else if (key === bindings["search"]) {
     // Otherwise ⌘F only ever opened the browser's own find bar in the
     // editor, even though a real find/replace panel exists right there —
     // inconsistent with the list screen, where ⌘F already focuses search.
@@ -6238,6 +8224,8 @@ function cmdkActionItems(query) {
     { label: "Voir la corbeille", sub: "", action: () => { showList(); setListView("trash"); } },
     { label: "Sélection multiple", sub: "Archiver / déplacer / supprimer plusieurs notes", action: () => { showList(); setSelectionMode(true); } },
     { label: "Note du jour", sub: "Journal", action: () => document.getElementById("journal-today-btn").click() },
+    { label: "Vue graphe", sub: "", action: () => document.getElementById("graph-view-btn").click() },
+    { label: "Toutes les tâches", sub: "", action: () => document.getElementById("tasks-view-btn").click() },
   ];
   // These only make sense with a note actually open — listed here instead of
   // buried in the editor's own "..." menu, since ⌘K is meant to be the one
@@ -6280,7 +8268,7 @@ function renderCmdkResults(rawQuery) {
       .filter((t) => !q || t.toLowerCase().includes(q))
       .map((t) => ({
         label: "#" + t,
-        sub: `${notes.filter((n) => !n.deletedAt && (n.tags || []).includes(t)).length} note(s)`,
+        sub: `${notesInActiveVault().filter((n) => !n.deletedAt && (n.tags || []).includes(t)).length} note(s)`,
         action: () => {
           showList();
           activeTagFilter = t;
@@ -6293,7 +8281,7 @@ function renderCmdkResults(rawQuery) {
       .filter((f) => !q || f.toLowerCase().includes(q))
       .map((f) => ({
         label: f,
-        sub: `${notes.filter((n) => !n.deletedAt && (n.folder === f || (n.folder || "").startsWith(f + "/"))).length} note(s)`,
+        sub: `${notesInActiveVault().filter((n) => !n.deletedAt && (n.folder === f || (n.folder || "").startsWith(f + "/"))).length} note(s)`,
         action: () => {
           showList();
           activeFolderFilter = f;
@@ -6304,12 +8292,12 @@ function renderCmdkResults(rawQuery) {
   } else if (mode === ">") {
     cmdkItems = cmdkActionItems(q);
   } else {
-    let candidateNotes = notes.filter((n) => !n.deletedAt);
+    let candidateNotes = notesInActiveVault().filter((n) => !n.deletedAt);
     if (!q) {
       const recentIds = loadPref(RECENT_NOTES_KEY, []);
       const recentSet = new Set(recentIds);
-      candidateNotes = recentIds.map((id) => notes.find((n) => n.id === id && !n.deletedAt)).filter(Boolean);
-      if (!candidateNotes.length) candidateNotes = notes.filter((n) => !n.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
+      candidateNotes = recentIds.map((id) => notes.find((n) => n.id === id && !n.deletedAt && (n.vaultId || DEFAULT_VAULT_ID) === activeVaultId)).filter(Boolean);
+      if (!candidateNotes.length) candidateNotes = notesInActiveVault().filter((n) => !n.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8);
     } else {
       candidateNotes = candidateNotes
         .filter((n) => {
@@ -6405,6 +8393,75 @@ async function handleIncomingShare() {
   showToast("Contenu partagé ajouté à une nouvelle note");
 }
 
+// --- Onboarding: a 3-step interactive tutorial shown once, on first launch
+// (no notes yet and the flag never set) — [[wikilinks]], ⌘K, and a closing
+// pointer to the rest of the app (shortcuts, ⋯ menus). Replayable anytime
+// from the list menu. ---
+const ONBOARDING_DONE_KEY = "noteflow.onboarding.done";
+const onboardingOverlay = document.getElementById("onboarding-overlay");
+const onboardingStepEl = document.getElementById("onboarding-step");
+const onboardingDotsEl = document.getElementById("onboarding-dots");
+const onboardingNextBtn = document.getElementById("onboarding-next-btn");
+const onboardingSkipBtn = document.getElementById("onboarding-skip-btn");
+let onboardingStepIndex = 0;
+
+const ONBOARDING_STEPS = [
+  {
+    title: "Bienvenue dans NoteFlow",
+    body: "Un carnet de notes local, rapide, et privé. Ce tour rapide te montre deux réflexes qui changent tout : les liens entre notes, et la palette de commandes.",
+  },
+  {
+    title: "Relie tes notes avec [[ ]]",
+    body: 'Dans le texte, tape <code>[[</code> puis le début du titre d\'une autre note : un menu apparaît pour la choisir (ou en créer une nouvelle à la volée). Le lien devient cliquable, et le panneau "Notes liées" montre les allers-retours dans les deux sens.',
+  },
+  {
+    title: "Va n'importe où avec ⌘K",
+    body: "Appuie sur <kbd class=\"shortcut-key\">Ctrl/⌘+K</kbd> à tout moment pour ouvrir une note par son titre ou son contenu, ou lancer une action (nouvelle note, thème, archives…) sans lâcher le clavier. Essaie <kbd class=\"shortcut-key\">&gt;</kbd>, <kbd class=\"shortcut-key\">#</kbd> ou <kbd class=\"shortcut-key\">/</kbd> en début de recherche pour filtrer par actions, tags ou dossiers.",
+  },
+  {
+    title: "C'est parti",
+    body: 'Le reste s\'explore au fil de l\'écriture : le menu "⋯" de chaque note cache verrouillage, historique, export, mode focus… et tu peux revoir ce tutoriel depuis le menu de la liste.',
+  },
+];
+
+function renderOnboardingStep() {
+  const step = ONBOARDING_STEPS[onboardingStepIndex];
+  onboardingStepEl.innerHTML = `<h2>${escapeHtml(step.title)}</h2><p>${step.body}</p>`;
+  onboardingDotsEl.innerHTML = "";
+  ONBOARDING_STEPS.forEach((_, i) => {
+    const dot = document.createElement("span");
+    dot.className = "onboarding-dot" + (i === onboardingStepIndex ? " active" : "");
+    onboardingDotsEl.appendChild(dot);
+  });
+  const isLast = onboardingStepIndex === ONBOARDING_STEPS.length - 1;
+  onboardingNextBtn.textContent = isLast ? "Commencer" : "Suivant";
+}
+
+function openOnboarding() {
+  onboardingStepIndex = 0;
+  onboardingOverlay.classList.remove("hidden");
+  renderOnboardingStep();
+}
+
+function closeOnboarding() {
+  onboardingOverlay.classList.add("hidden");
+  savePref(ONBOARDING_DONE_KEY, true);
+}
+
+onboardingNextBtn.addEventListener("click", () => {
+  if (onboardingStepIndex < ONBOARDING_STEPS.length - 1) {
+    onboardingStepIndex++;
+    renderOnboardingStep();
+  } else {
+    closeOnboarding();
+  }
+});
+onboardingSkipBtn.addEventListener("click", closeOnboarding);
+document.getElementById("replay-onboarding-btn").addEventListener("click", () => {
+  showList();
+  openOnboarding();
+});
+
 // --- Init ---
 (async () => {
   try {
@@ -6419,6 +8476,7 @@ async function handleIncomingShare() {
   await handleIncomingShare();
   summarizeMissedReminders();
   initSyncFromStorage();
+  if (!loadPref(ONBOARDING_DONE_KEY, false)) openOnboarding();
 })();
 
 // --- PWA service worker ---
